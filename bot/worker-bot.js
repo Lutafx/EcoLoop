@@ -300,7 +300,7 @@ async function onMessage(msg) {
 async function onCallback(q) {
   const cid = q.message.chat.id;
   const mid = q.message.message_id;
-  const d = q.callback_data;
+  const d = q.data;
 
   // ОБЯЗАТЕЛЬНО ответить на callback — иначе крутит loading
   await answer(q.id);
