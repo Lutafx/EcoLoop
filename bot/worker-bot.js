@@ -11,7 +11,7 @@ const app = express();
 app.use(express.json());
 
 // ===== КОНФИГУРАЦИЯ =====
-const TG_TOKEN = '8547995948:AAGP-JDNJowAvmTqMK04n9rNZ16519dp2C8';
+const TG_TOKEN = '8366887446:AAFSk-GGnyu51gZRSqGBfpcQg5yxvXBE68U';
 const TG_CHAT  = '7682446178';
 const TG_API   = `https://api.telegram.org/bot${TG_TOKEN}`;
 const PORT = process.env.PORT || 3000;
@@ -87,7 +87,8 @@ app.post('/api/submit', async (req, res) => {
 
     const icons = {
       hotel: '🏨', post: '📝', callback: '📞',
-      request: '📋', buyer: '👤', vacancy: '💼'
+      request: '📋', buyer: '👤', vacancy: '💼',
+      support: '🛟', complaint: '🚨', suggestion: '💡'
     };
     const names = {
       hotel: 'РЕГИСТРАЦИЯ ОТЕЛЯ',
@@ -95,7 +96,10 @@ app.post('/api/submit', async (req, res) => {
       callback: 'ОБРАТНЫЙ ЗВОНОК',
       request: 'НОВЫЙ ЗАПРОС',
       buyer: 'РЕГИСТРАЦИЯ ПОКУПАТЕЛЯ',
-      vacancy: 'ОТКЛИК НА ВАКАНСИЮ'
+      vacancy: 'ОТКЛИК НА ВАКАНСИЮ',
+      support: 'ОБРАЩЕНИЕ В ПОДДЕРЖКУ',
+      complaint: 'ЖАЛОБА',
+      suggestion: 'ПРЕДЛОЖЕНИЕ'
     };
 
     const icon = icons[type] || '📩';
@@ -322,7 +326,8 @@ async function onCallback(q) {
 
     const icons = {
       hotel: '🏨', post: '📝', request: '📋',
-      complaint: '🚨', callback: '📞', buyer: '👤', vacancy: '💼'
+      complaint: '🚨', callback: '📞', buyer: '👤', vacancy: '💼',
+      support: '🛟', suggestion: '💡'
     };
     const icon = icons[type] || '📩';
 
