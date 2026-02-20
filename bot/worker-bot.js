@@ -121,14 +121,26 @@ app.post('/api/submit', async (req, res) => {
       res.json({ success: true, message: 'Пост отправлен на модерацию' });
 
     } else {
+      // ВСЕ типы заявок с кнопками одобрения
       const labels = { callback: '📞 Обратный звонок', request: '📋 Новый запрос', buyer: '👤 Регистрация покупателя' };
-      let text = `${labels[type] || '📩 Новая заявка'}\n\n`;
+      pendingApprovals.set(id, { type, data, timestamp: new Date().toISOString() });
+
+      let text = `${labels[type] || '📩 Новая заявка'} — ЖДЁТ ОДОБРЕНИЯ\n🆔 #${id}\n\n`;
       for (const [key, value] of Object.entries(data)) {
-        if (value) text += `*${key}:* ${value}\n`;
+        if (value) text += `${key}: ${value}\n`;
       }
       text += `\n🕐 ${new Date().toLocaleString('ru-RU')}`;
-      await sendMessage(TG_CHAT, text);
-      res.json({ success: true });
+
+      const keyboard = {
+        inline_keyboard: [
+          [
+            { text: '✅ Принять', callback_data: `approve_${type}_${id}` },
+            { text: '❌ Отклонить', callback_data: `reject_${type}_${id}` }
+          ]
+        ]
+      };
+      await sendMessageWithKeyboard(TG_CHAT, text, keyboard);
+      res.json({ success: true, message: 'Заявка отправлена на рассмотрение' });
     }
   } catch (err) {
     console.error('Submit error:', err);
@@ -441,6 +453,49 @@ async function handleCallback(query) {
     return;
   }
 
+  // ===== ОБРАТНЫЙ ЗВОНОК =====
+  if (data.startsWith('approve_callback_')) {
+    if (!isAdmin(chatId)) { await sendMessage(chatId, '🔒'); return; }
+    const id = parseInt(data.replace('approve_callback_', ''));
+    const item = pendingApprovals.get(id);
+    if (!item) { await sendMessage(chatId, '⚠️ Заявка не найдена.'); return; }
+    pendingApprovals.delete(id);
+    await editMessage(chatId, msgId, `✅ ЗВОНОК ПРИНЯТ 🆔 #${id}\n\n${formatData(item.data)}\n\n✅ Принято: ${new Date().toLocaleString('ru-RU')}\n👤 Менеджер: ${query.from.first_name}`);
+    await sendMessage(chatId, `📞 Позвоните клиенту:\n${item.data.phone || item.data.email || 'Контакт не указан'}`);
+    return;
+  }
+  if (data.startsWith('reject_callback_')) {
+    if (!isAdmin(chatId)) { await sendMessage(chatId, '🔒'); return; }
+    const id = parseInt(data.replace('reject_callback_', ''));
+    const item = pendingApprovals.get(id);
+    if (!item) { await sendMessage(chatId, '⚠️ Заявка не найдена.'); return; }
+    pendingApprovals.delete(id);
+    await editMessage(chatId, msgId, `❌ ЗВОНОК ОТКЛОНЁН 🆔 #${id}\n\n${formatData(item.data)}\n\n❌ Отклонено: ${new Date().toLocaleString('ru-RU')}`);
+    return;
+  }
+
+  // ===== РЕГИСТРАЦИЯ ПОКУПАТЕЛЯ =====
+  if (data.startsWith('approve_buyer_')) {
+    if (!isAdmin(chatId)) { await sendMessage(chatId, '🔒'); return; }
+    const id = parseInt(data.replace('approve_buyer_', ''));
+    const item = pendingApprovals.get(id);
+    if (!item) { await sendMessage(chatId, '⚠️ Заявка не найдена.'); return; }
+    pendingApprovals.delete(id);
+    await editMessage(chatId, msgId, `✅ ПОКУПАТЕЛЬ ОДОБРЕН 🆔 #${id}\n\n${formatData(item.data)}\n\n✅ Одобрено: ${new Date().toLocaleString('ru-RU')}\n👤 Админ: ${query.from.first_name}`);
+    if (item.userChatId) await sendMessage(item.userChatId, `✅ Ваша регистрация одобрена! Добро пожаловать в EcoLoop.`);
+    return;
+  }
+  if (data.startsWith('reject_buyer_')) {
+    if (!isAdmin(chatId)) { await sendMessage(chatId, '🔒'); return; }
+    const id = parseInt(data.replace('reject_buyer_', ''));
+    const item = pendingApprovals.get(id);
+    if (!item) { await sendMessage(chatId, '⚠️ Заявка не найдена.'); return; }
+    pendingApprovals.delete(id);
+    await editMessage(chatId, msgId, `❌ ПОКУПАТЕЛЬ ОТКЛОНЁН 🆔 #${id}\n\n${formatData(item.data)}\n\n❌ Отклонено: ${new Date().toLocaleString('ru-RU')}`);
+    if (item.userChatId) await sendMessage(item.userChatId, `❌ Вашу регистрацию отклонили. Свяжитесь: +7 (776) 075-24-63`);
+    return;
+  }
+
   // ===== ЖАЛОБА =====
   if (data.startsWith('approve_complaint_')) {
     if (!isAdmin(chatId)) { await sendMessage(chatId, '🔒'); return; }
@@ -470,7 +525,7 @@ async function handleCallback(query) {
     if (pendingApprovals.size === 0) { await sendMessage(chatId, '✅ Нет заявок на одобрение!'); return; }
     let text = `📋 *Ожидают одобрения (${pendingApprovals.size}):*\n\n`;
     for (const [id, item] of pendingApprovals) {
-      const icons = { hotel: '🏨', post: '📝', request: '📋', complaint: '🚨' };
+      const icons = { hotel: '🏨', post: '📝', request: '📋', complaint: '🚨', callback: '📞', buyer: '👤' };
       text += `${icons[item.type] || '📩'} #${id} — ${item.type} — ${item.timestamp}\n`;
     }
     await sendMessage(chatId, text);
