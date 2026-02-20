@@ -231,8 +231,8 @@ async function handleMessage(update) {
     const keyboard = {
       inline_keyboard: [
         [
-          { text: `� Ожидают (${pendingCount})`, callback_data: 'admin_pending' },
-          { text: '� Статистика', callback_data: 'admin_stats' }
+          { text: `📋 Ожидают (${pendingCount})`, callback_data: 'admin_pending' },
+          { text: `📊 Статистика`, callback_data: 'admin_stats' }
         ],
         [
           { text: '📢 Рассылка', callback_data: 'admin_broadcast' },
@@ -840,44 +840,59 @@ function formatData(data) {
 
 // ===== ОТПРАВКА СООБЩЕНИЙ =====
 async function sendMessage(chatId, text) {
-  await fetch(`${TG_API}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text: text,
-      parse_mode: 'Markdown',
-      disable_web_page_preview: true
-    })
-  });
+  try {
+    const res = await fetch(`${TG_API}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: text,
+        disable_web_page_preview: true
+      })
+    });
+    const json = await res.json();
+    if (!json.ok) console.error('sendMessage error:', json);
+  } catch (err) {
+    console.error('sendMessage fetch error:', err);
+  }
 }
 
 async function sendMessageWithKeyboard(chatId, text, keyboard) {
-  await fetch(`${TG_API}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text: text,
-      parse_mode: 'Markdown',
-      disable_web_page_preview: true,
-      reply_markup: keyboard
-    })
-  });
+  try {
+    const res = await fetch(`${TG_API}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: text,
+        disable_web_page_preview: true,
+        reply_markup: keyboard
+      })
+    });
+    const json = await res.json();
+    if (!json.ok) console.error('sendMessageWithKeyboard error:', json);
+  } catch (err) {
+    console.error('sendMessageWithKeyboard fetch error:', err);
+  }
 }
 
 async function editMessage(chatId, messageId, text) {
-  await fetch(`${TG_API}/editMessageText`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: chatId,
-      message_id: messageId,
-      text: text,
-      parse_mode: 'Markdown',
-      disable_web_page_preview: true
-    })
-  });
+  try {
+    const res = await fetch(`${TG_API}/editMessageText`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        message_id: messageId,
+        text: text,
+        disable_web_page_preview: true
+      })
+    });
+    const json = await res.json();
+    if (!json.ok) console.error('editMessage error:', json);
+  } catch (err) {
+    console.error('editMessage fetch error:', err);
+  }
 }
 
 // ===== ЗАПУСК СЕРВЕРА =====
