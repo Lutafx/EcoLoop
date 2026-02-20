@@ -69,10 +69,17 @@ app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
   try {
     const u = req.body;
-    if (u.message) await onMessage(u.message);
-    if (u.callback_query) await onCallback(u.callback_query);
+    console.log('📨 WEBHOOK:', JSON.stringify(u).substring(0, 300));
+    if (u.message) {
+      console.log('💬 Message from:', u.message.from?.id, u.message.text?.substring(0, 50));
+      await onMessage(u.message);
+    }
+    if (u.callback_query) {
+      console.log('🔘 Callback:', u.callback_query.data, 'from:', u.callback_query.from?.id);
+      await onCallback(u.callback_query);
+    }
   } catch (err) {
-    console.error('WEBHOOK ERROR:', err.message);
+    console.error('WEBHOOK ERROR:', err.message, err.stack?.substring(0, 200));
   }
 });
 
@@ -709,7 +716,41 @@ async function answer(callbackId) {
 }
 
 // ===== СТАРТ =====
-app.listen(PORT, () => {
+// Авто-установка webhook при запуске
+const RENDER_URL = 'https://ecoloop-idd1.onrender.com';
+
+async function setupWebhook() {
+  const webhookUrl = `${RENDER_URL}/webhook`;
+  try {
+    // Сначала удаляем старый webhook
+    await fetch(`${TG_API}/deleteWebhook`);
+    
+    const res = await fetch(`${TG_API}/setWebhook`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url: webhookUrl,
+        allowed_updates: ['message', 'callback_query'],
+        drop_pending_updates: true
+      })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      console.log('✅ Webhook установлен:', webhookUrl);
+    } else {
+      console.log('❌ Ошибка webhook:', JSON.stringify(data));
+    }
+    
+    // Проверяем
+    const info = await fetch(`${TG_API}/getWebhookInfo`);
+    const infoData = await info.json();
+    console.log('📡 Webhook info:', JSON.stringify(infoData.result).substring(0, 300));
+  } catch (err) {
+    console.log('❌ Не удалось установить webhook:', err.message);
+  }
+}
+
+app.listen(PORT, async () => {
   console.log('');
   console.log('====================================');
   console.log('  EcoLoop Bot v5.0');
@@ -720,4 +761,7 @@ app.listen(PORT, () => {
   console.log('  Time: ' + time());
   console.log('====================================');
   console.log('');
+  
+  // Устанавливаем webhook
+  await setupWebhook();
 });
