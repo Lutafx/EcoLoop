@@ -64,22 +64,15 @@ app.get('/', (req, res) => {
   });
 });
 
-// ===== WEBHOOK =====
+// ===== WEBHOOK (оставляем для API заявок с сайта) =====
 app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
   try {
     const u = req.body;
-    console.log('📨 WEBHOOK:', JSON.stringify(u).substring(0, 300));
-    if (u.message) {
-      console.log('💬 Message from:', u.message.from?.id, u.message.text?.substring(0, 50));
-      await onMessage(u.message);
-    }
-    if (u.callback_query) {
-      console.log('🔘 Callback:', u.callback_query.data, 'from:', u.callback_query.from?.id);
-      await onCallback(u.callback_query);
-    }
+    if (u.message) await onMessage(u.message);
+    if (u.callback_query) await onCallback(u.callback_query);
   } catch (err) {
-    console.error('WEBHOOK ERROR:', err.message, err.stack?.substring(0, 200));
+    console.error('WEBHOOK ERROR:', err.message);
   }
 });
 
@@ -715,53 +708,58 @@ async function answer(callbackId) {
   }
 }
 
-// ===== СТАРТ =====
-// Авто-установка webhook при запуске
-const RENDER_URL = 'https://ecoloop-idd1.onrender.com';
+// ===== LONG POLLING (как infinity_polling в Python) =====
+let lastUpdateId = 0;
 
-async function setupWebhook() {
-  const webhookUrl = `${RENDER_URL}/webhook`;
-  try {
-    // Сначала удаляем старый webhook
-    await fetch(`${TG_API}/deleteWebhook`);
-    
-    const res = await fetch(`${TG_API}/setWebhook`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        url: webhookUrl,
-        allowed_updates: ['message', 'callback_query'],
-        drop_pending_updates: true
-      })
-    });
-    const data = await res.json();
-    if (data.ok) {
-      console.log('✅ Webhook установлен:', webhookUrl);
-    } else {
-      console.log('❌ Ошибка webhook:', JSON.stringify(data));
+async function poll() {
+  while (true) {
+    try {
+      const r = await fetch(`${TG_API}/getUpdates?offset=${lastUpdateId + 1}&timeout=30&allowed_updates=["message","callback_query"]`);
+      const j = await r.json();
+
+      if (j.ok && j.result.length > 0) {
+        for (const u of j.result) {
+          lastUpdateId = u.update_id;
+
+          if (u.message) {
+            console.log('💬 Message:', u.message.from?.id, u.message.text?.substring(0, 50));
+            await onMessage(u.message);
+          }
+          if (u.callback_query) {
+            console.log('� Callback:', u.callback_query.data, 'from:', u.callback_query.from?.id);
+            await onCallback(u.callback_query);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('POLL ERROR:', err.message);
+      await new Promise(r => setTimeout(r, 3000));
     }
-    
-    // Проверяем
-    const info = await fetch(`${TG_API}/getWebhookInfo`);
-    const infoData = await info.json();
-    console.log('📡 Webhook info:', JSON.stringify(infoData.result).substring(0, 300));
-  } catch (err) {
-    console.log('❌ Не удалось установить webhook:', err.message);
   }
 }
 
+// ===== СТАРТ =====
 app.listen(PORT, async () => {
   console.log('');
   console.log('====================================');
-  console.log('  EcoLoop Bot v5.0');
+  console.log('  EcoLoop Bot v5.1 (Long Polling)');
   console.log('  Port: ' + PORT);
-  console.log('  Webhook: POST /webhook');
   console.log('  API: POST /api/submit');
   console.log('  Health: GET /');
   console.log('  Time: ' + time());
   console.log('====================================');
   console.log('');
-  
-  // Устанавливаем webhook
-  await setupWebhook();
+
+  try {
+    // Удаляем старый webhook — без этого polling не работает
+    const del = await fetch(`${TG_API}/deleteWebhook?drop_pending_updates=true`);
+    const delData = await del.json();
+    console.log('🗑️ Webhook удалён:', delData.ok ? '✅' : '❌');
+
+    // Запускаем Long Polling
+    console.log('🚀 Long Polling запущен...');
+    poll();
+  } catch (err) {
+    console.log('❌ Ошибка старта:', err.message);
+  }
 });
