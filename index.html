@@ -715,7 +715,10 @@
 
         // Главное приложение
         function App() {
-            const [currentPage, setCurrentPage] = useState('landing');
+            const [currentPage, setCurrentPage] = useState(() => {
+                const saved = localStorage.getItem('ecoloop_page');
+                return (saved && !['admin'].includes(saved)) ? saved : 'landing';
+            });
             const [userRole, setUserRole] = useState(null);
             const [selectedLot, setSelectedLot] = useState(null);
             const [user, setUser] = useState(null);
@@ -723,6 +726,13 @@
 
             // Слушаем состояние авторизации
             useEffect(() => {
+                // Обработка redirect после Google Auth
+                auth.getRedirectResult().then(result => {
+                    if (result?.user) {
+                        navigate('marketplace');
+                    }
+                }).catch(e => console.error('Redirect result err:', e));
+
                 const unsub = auth.onAuthStateChanged(async (u) => {
                     setUser(u);
                     setAuthLoading(false);
@@ -736,6 +746,14 @@
                                 lastLogin: firebase.firestore.FieldValue.serverTimestamp()
                             }, { merge: true });
                         } catch (e) { console.error('User save err:', e); }
+                    } else {
+                        // Если не залогинен, а страница требует логина — на landing
+                        const authPages = ['account', 'hotel-cabinet', 'create-lot', 'payouts'];
+                        const saved = localStorage.getItem('ecoloop_page');
+                        if (saved && authPages.includes(saved)) {
+                            setCurrentPage('landing');
+                            localStorage.removeItem('ecoloop_page');
+                        }
                     }
                 });
                 return () => unsub();
@@ -750,6 +768,7 @@
 
             const navigate = (page, data = null) => {
                 setCurrentPage(page);
+                localStorage.setItem('ecoloop_page', page);
                 if (data) setSelectedLot(data);
                 window.scrollTo(0, 0);
             };
@@ -769,17 +788,32 @@
 
             const loginWithGoogle = async () => {
                 try {
-                    await auth.signInWithPopup(googleProvider);
-                    setCurrentPage('marketplace');
+                    const result = await auth.signInWithPopup(googleProvider);
+                    if (result.user) {
+                        navigate('marketplace');
+                    }
                 } catch (e) {
-                    console.error('Google login err:', e);
-                    alert('Ошибка входа через Google. Попробуйте еще раз.');
+                    console.error('Google login err:', e.code, e.message);
+                    // Если popup заблокирован — используем redirect
+                    if (e.code === 'auth/popup-blocked' || e.code === 'auth/popup-closed-by-user' || e.code === 'auth/cancelled-popup-request') {
+                        try {
+                            await auth.signInWithRedirect(googleProvider);
+                        } catch (e2) {
+                            console.error('Redirect login err:', e2);
+                            alert('Ошибка входа. Проверьте что Google Auth включён в Firebase Console.');
+                        }
+                    } else if (e.code === 'auth/unauthorized-domain') {
+                        alert('Домен не авторизован в Firebase. Добавьте ' + window.location.hostname + ' в Firebase Console → Authentication → Settings → Authorized domains');
+                    } else {
+                        alert('Ошибка входа: ' + e.message);
+                    }
                 }
             };
 
             const logout = async () => {
                 await auth.signOut();
                 setUser(null);
+                localStorage.removeItem('ecoloop_page');
                 setCurrentPage('landing');
             };
 
@@ -795,19 +829,20 @@
                 <div>
                     {currentPage === 'role-select' && <RoleSelect selectRole={selectRole} navigate={navigate} />}
                     {currentPage === 'buyer-register' && <BuyerRegister navigate={navigate} loginWithGoogle={loginWithGoogle} user={user} />}
-                    {currentPage === 'hotel-request' && <HotelRequestForm navigate={navigate} />}
+                    {currentPage === 'hotel-request' && <HotelRequestForm navigate={navigate} user={user} loginWithGoogle={loginWithGoogle} />}
                     {currentPage === 'landing' && <Landing navigate={navigate} user={user} logout={logout} />}
                     {currentPage === 'marketplace' && <Marketplace navigate={navigate} user={user} logout={logout} />}
                     {currentPage === 'requests' && <Requests navigate={navigate} />}
-                    {currentPage === 'dashboard' && <Dashboard navigate={navigate} user={user} logout={logout} />}
+                    {currentPage === 'dashboard' && <Dashboard navigate={navigate} user={user} logout={logout} isAdmin={user && ADMIN_EMAILS.includes(user.email)} />}
                     {currentPage === 'create-lot' && <CreateLot navigate={navigate} />}
                     {currentPage === 'create-request' && <CreateRequest navigate={navigate} />}
                     {currentPage === 'lot-detail' && <LotDetail navigate={navigate} lot={selectedLot} user={user} />}
                     {currentPage === 'payouts' && <SellerPayouts navigate={navigate} />}
                     {currentPage === 'admin' && <AdminPanel navigate={navigate} user={user} logout={logout} loginWithGoogle={loginWithGoogle} />}
                     {currentPage === 'buyer-profile' && <BuyerProfile navigate={navigate} user={user} logout={logout} />}
-                    {currentPage === 'analytics' && <Analytics navigate={navigate} />}
+                    {currentPage === 'analytics' && <Analytics navigate={navigate} isAdmin={user && ADMIN_EMAILS.includes(user.email)} />}
                     {currentPage === 'account' && <AccountPage navigate={navigate} user={user} logout={logout} />}
+                    {currentPage === 'hotel-cabinet' && <HotelCabinet navigate={navigate} user={user} logout={logout} />}
                     {currentPage === 'support' && <SupportPage navigate={navigate} user={user} />}
 
                     {/* Мобильная навигация — показывается только на телефонах */}
@@ -877,6 +912,11 @@
                                 </div>
                             </div>
                         </div>
+                        {/* Кнопка кабинета отеля */}
+                        <button onClick={() => navigate('hotel-cabinet')} className="w-full mb-6 py-3 bg-gradient-to-r from-emerald-500/10 to-teal-500/10 border border-emerald-500/20 text-emerald-400 rounded-xl font-semibold hover:bg-emerald-500/20 transition flex items-center justify-center gap-2">
+                            🏨 Кабинет отеля
+                        </button>
+
                         <div className="flex gap-2 mb-6 overflow-x-auto pb-2">
                             {[['orders', '📦 Заказы'], ['favorites', '❤️ Избранное'], ['settings', '⚙️ Настройки']].map(([key, label]) => (
                                 <button key={key} onClick={() => setTab(key)} className={`px-4 py-2 rounded-xl text-sm font-medium whitespace-nowrap transition ${tab === key ? 'bg-emerald-500 text-white' : 'bg-white/5 text-gray-400 hover:bg-white/10'}`}>{label}</button>
@@ -920,6 +960,351 @@
                                 <div>
                                     <label className="text-gray-400 text-sm">Уведомления</label>
                                     <p className="text-emerald-400 text-sm">Включены (Telegram бот)</p>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        // Личный кабинет отеля
+        function HotelCabinet({ navigate, user, logout }) {
+            const [hotelData, setHotelData] = useState(null);
+            const [loading, setLoading] = useState(true);
+            const [bindMode, setBindMode] = useState(false);
+            const [bindBin, setBindBin] = useState('');
+            const [bindError, setBindError] = useState('');
+            const [tab, setTab] = useState('overview');
+            const [lots, setLots] = useState([]);
+
+            useEffect(() => {
+                if (!user) { setLoading(false); return; }
+                // Ищем заявку отеля по Google UID или email
+                const findHotel = async () => {
+                    try {
+                        // Сначала по googleUid
+                        let snap = await db.collection('submissions')
+                            .where('type', '==', 'hotel')
+                            .where('data.googleUid', '==', user.uid)
+                            .limit(1).get();
+                        
+                        if (snap.empty) {
+                            // Потом по email
+                            snap = await db.collection('submissions')
+                                .where('type', '==', 'hotel')
+                                .where('data.googleEmail', '==', user.email)
+                                .limit(1).get();
+                        }
+                        
+                        if (!snap.empty) {
+                            const doc = snap.docs[0];
+                            setHotelData({ id: doc.id, ...doc.data() });
+                            // Загружаем лоты отеля
+                            const lotsSnap = await db.collection('lots')
+                                .where('hotelId', '==', doc.id)
+                                .orderBy('createdAt', 'desc').limit(20).get()
+                                .catch(() => ({ docs: [] }));
+                            setLots(lotsSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+                        }
+                    } catch (err) {
+                        console.error('Hotel search error:', err);
+                    }
+                    setLoading(false);
+                };
+                findHotel();
+            }, [user]);
+
+            // Привязка по БИН
+            const handleBind = async () => {
+                if (bindBin.length !== 12) { setBindError('БИН должен содержать 12 цифр'); return; }
+                setBindError('');
+                try {
+                    const snap = await db.collection('submissions')
+                        .where('type', '==', 'hotel')
+                        .where('data.bin', '==', bindBin)
+                        .limit(1).get();
+                    
+                    if (snap.empty) {
+                        setBindError('Заявка с таким БИН не найдена');
+                        return;
+                    }
+                    const doc = snap.docs[0];
+                    // Привязываем Google аккаунт
+                    await db.collection('submissions').doc(doc.id).update({
+                        'data.googleUid': user.uid,
+                        'data.googleEmail': user.email,
+                        'data.googleName': user.displayName
+                    });
+                    setHotelData({ id: doc.id, ...doc.data() });
+                    setBindMode(false);
+                } catch (err) {
+                    setBindError('Ошибка: ' + err.message);
+                }
+            };
+
+            if (loading) return (
+                <div className="min-h-screen bg-[#0a0a0a] flex items-center justify-center">
+                    <div className="text-emerald-400 animate-pulse">🏨 Загрузка...</div>
+                </div>
+            );
+
+            if (!user) return (
+                <div className="min-h-screen bg-[#0a0a0a] flex items-center justify-center p-4">
+                    <div className="bg-white/5 rounded-2xl p-8 max-w-md w-full text-center">
+                        <div className="text-6xl mb-4">🏨</div>
+                        <h2 className="text-2xl font-bold text-white mb-4">Кабинет отеля</h2>
+                        <p className="text-gray-400 mb-6">Войдите через Google чтобы увидеть статус вашей заявки</p>
+                        <button onClick={() => navigate('buyer-register')} className="w-full py-3 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-semibold transition">
+                            Войти через Google
+                        </button>
+                    </div>
+                </div>
+            );
+
+            // Нет привязанной заявки
+            if (!hotelData) return (
+                <div className="min-h-screen bg-[#0a0a0a] p-4 md:p-8">
+                    <div className="max-w-lg mx-auto">
+                        <button onClick={() => navigate('account')} className="text-gray-400 hover:text-white transition mb-6 inline-block">◀️ Назад</button>
+                        <div className="bg-white/5 rounded-2xl p-8 text-center">
+                            <div className="text-6xl mb-4">🏨</div>
+                            <h2 className="text-2xl font-bold text-white mb-4">Кабинет отеля</h2>
+                            <p className="text-gray-400 mb-6">У вас нет привязанной заявки отеля.</p>
+                            
+                            {!bindMode ? (
+                                <div className="space-y-3">
+                                    <button onClick={() => navigate('hotel-request')} className="w-full py-3 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-semibold transition">
+                                        📝 Подать заявку на подключение
+                                    </button>
+                                    <button onClick={() => setBindMode(true)} className="w-full py-3 bg-white/5 hover:bg-white/10 text-gray-300 rounded-xl transition">
+                                        🔗 Привязать по БИН
+                                    </button>
+                                </div>
+                            ) : (
+                                <div className="text-left">
+                                    <label className="block text-sm text-gray-400 mb-2">Введите БИН из заявки:</label>
+                                    <input 
+                                        type="text" 
+                                        value={bindBin} 
+                                        onChange={(e) => setBindBin(e.target.value.replace(/\D/g, '').slice(0, 12))}
+                                        placeholder="123456789012" 
+                                        maxLength="12"
+                                        className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder-gray-600 focus:outline-none focus:border-emerald-500/50 transition mb-3"
+                                    />
+                                    {bindError && <p className="text-red-400 text-sm mb-3">{bindError}</p>}
+                                    <div className="flex gap-2">
+                                        <button onClick={handleBind} className="flex-1 py-3 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-semibold transition">
+                                            Привязать
+                                        </button>
+                                        <button onClick={() => { setBindMode(false); setBindError(''); }} className="px-4 py-3 bg-white/5 hover:bg-white/10 text-gray-300 rounded-xl transition">
+                                            Отмена
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+
+            const status = hotelData.status;
+            const d = hotelData.data || {};
+
+            // Заявка на рассмотрении
+            if (status === 'new') return (
+                <div className="min-h-screen bg-[#0a0a0a] p-4 md:p-8">
+                    <div className="max-w-lg mx-auto">
+                        <button onClick={() => navigate('account')} className="text-gray-400 hover:text-white transition mb-6 inline-block">◀️ Назад</button>
+                        <div className="bg-white/5 rounded-2xl p-8 text-center">
+                            <div className="text-6xl mb-4 animate-pulse">⏳</div>
+                            <h2 className="text-2xl font-bold text-white mb-3">Заявка на рассмотрении</h2>
+                            <p className="text-gray-400 mb-6">Ваша заявка отправлена и ожидает проверки администратором. Обычно это занимает 24-48 часов.</p>
+                            <div className="bg-white/5 rounded-xl p-4 text-left mb-6">
+                                <div className="text-sm space-y-2">
+                                    <div className="flex justify-between"><span className="text-gray-500">Отель:</span><span className="text-white">{d.hotelName}</span></div>
+                                    <div className="flex justify-between"><span className="text-gray-500">ИП/ТОО:</span><span className="text-white">{d.ipName}</span></div>
+                                    <div className="flex justify-between"><span className="text-gray-500">БИН:</span><span className="text-white">{d.bin}</span></div>
+                                    <div className="flex justify-between"><span className="text-gray-500">Контакт:</span><span className="text-white">{d.contactName}</span></div>
+                                    <div className="flex justify-between"><span className="text-gray-500">Email:</span><span className="text-white">{d.email}</span></div>
+                                    <div className="flex justify-between"><span className="text-gray-500">Телефон:</span><span className="text-white">{d.phone}</span></div>
+                                </div>
+                            </div>
+                            <div className="inline-block px-4 py-2 bg-yellow-500/20 text-yellow-400 rounded-full text-sm font-medium">
+                                ⏳ Ожидает проверки
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+
+            // Заявка отклонена
+            if (status === 'rejected') return (
+                <div className="min-h-screen bg-[#0a0a0a] p-4 md:p-8">
+                    <div className="max-w-lg mx-auto">
+                        <button onClick={() => navigate('account')} className="text-gray-400 hover:text-white transition mb-6 inline-block">◀️ Назад</button>
+                        <div className="bg-white/5 rounded-2xl p-8 text-center">
+                            <div className="text-6xl mb-4">❌</div>
+                            <h2 className="text-2xl font-bold text-white mb-3">Заявка отклонена</h2>
+                            <p className="text-gray-400 mb-6">К сожалению, ваша заявка была отклонена. Свяжитесь с поддержкой для уточнения.</p>
+                            <div className="flex gap-3 justify-center">
+                                <button onClick={() => navigate('support')} className="px-6 py-3 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-semibold transition">
+                                    💬 Поддержка
+                                </button>
+                                <button onClick={() => navigate('hotel-request')} className="px-6 py-3 bg-white/5 hover:bg-white/10 text-gray-300 rounded-xl transition">
+                                    📝 Подать заново
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+
+            // Заявка одобрена — ЛИЧНЫЙ КАБИНЕТ ОТЕЛЯ
+            return (
+                <div className="min-h-screen bg-[#0a0a0a] p-4 md:p-8">
+                    <div className="max-w-4xl mx-auto">
+                        <div className="flex items-center justify-between mb-6">
+                            <button onClick={() => navigate('marketplace')} className="text-gray-400 hover:text-white transition">◀️ Назад</button>
+                            <button onClick={logout} className="text-red-400 hover:text-red-300 text-sm transition">Выйти</button>
+                        </div>
+
+                        {/* Шапка профиля */}
+                        <div className="bg-gradient-to-r from-emerald-500/10 to-teal-500/10 rounded-2xl p-6 mb-6 border border-emerald-500/20">
+                            <div className="flex items-center gap-4">
+                                <div className="w-16 h-16 rounded-xl bg-emerald-500/20 flex items-center justify-center text-3xl">🏨</div>
+                                <div className="flex-1">
+                                    <h2 className="text-xl font-bold text-white">{d.hotelName}</h2>
+                                    <p className="text-gray-400 text-sm">{d.ipName} • БИН: {d.bin}</p>
+                                    <div className="flex items-center gap-2 mt-1">
+                                        <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-400 rounded-full text-xs font-medium">✅ Верифицирован</span>
+                                        <span className="text-gray-500 text-xs">{d.contactName} • {d.phone}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Табы */}
+                        <div className="flex gap-2 mb-6 overflow-x-auto pb-2">
+                            {[['overview', '📊 Обзор'], ['lots', '📦 Мои лоты'], ['profile', '⚙️ Профиль']].map(([key, label]) => (
+                                <button key={key} onClick={() => setTab(key)} className={`px-4 py-2 rounded-xl text-sm font-medium whitespace-nowrap transition ${tab === key ? 'bg-emerald-500 text-white' : 'bg-white/5 text-gray-400 hover:bg-white/10'}`}>{label}</button>
+                            ))}
+                        </div>
+
+                        {/* Обзор */}
+                        {tab === 'overview' && (
+                            <div>
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+                                    {[
+                                        ['📦', 'Лоты', lots.length, 'bg-emerald-500/10'],
+                                        ['🛒', 'Продано', lots.filter(l => l.status === 'sold').length, 'bg-blue-500/10'],
+                                        ['💰', 'Доход', lots.reduce((a, l) => a + (l.price || 0), 0).toLocaleString() + '₸', 'bg-amber-500/10'],
+                                        ['♻️', 'Сокращено', lots.reduce((a, l) => a + (l.weight || 0), 0) + 'кг', 'bg-teal-500/10']
+                                    ].map(([icon, label, value, bg], i) => (
+                                        <div key={i} className={`${bg} rounded-xl p-4 text-center`}>
+                                            <div className="text-2xl mb-1">{icon}</div>
+                                            <div className="text-white font-bold text-lg">{value}</div>
+                                            <div className="text-gray-500 text-xs">{label}</div>
+                                        </div>
+                                    ))}
+                                </div>
+
+                                <button onClick={() => navigate('create-lot')} className="w-full py-4 bg-gradient-to-r from-emerald-500 to-teal-500 text-white rounded-xl font-bold text-lg mb-4 hover:opacity-90 transition">
+                                    ➕ Создать новый лот
+                                </button>
+
+                                <div className="bg-white/5 rounded-xl p-4">
+                                    <h3 className="text-white font-semibold mb-3">Последние лоты</h3>
+                                    {lots.length === 0 ? (
+                                        <p className="text-gray-500 text-center py-4">Пока нет лотов. Создайте первый!</p>
+                                    ) : lots.slice(0, 5).map(lot => (
+                                        <div key={lot.id} className="flex items-center justify-between py-3 border-b border-white/5 last:border-0">
+                                            <div>
+                                                <p className="text-white text-sm font-medium">{lot.title || 'Лот'}</p>
+                                                <p className="text-gray-500 text-xs">{lot.category} • {lot.weight || 0}кг</p>
+                                            </div>
+                                            <div className="text-right">
+                                                <p className="text-emerald-400 font-semibold text-sm">{lot.price?.toLocaleString()}₸</p>
+                                                <span className={`text-xs px-2 py-0.5 rounded-full ${lot.status === 'active' ? 'bg-emerald-500/20 text-emerald-400' : lot.status === 'sold' ? 'bg-blue-500/20 text-blue-400' : 'bg-gray-500/20 text-gray-400'}`}>
+                                                    {lot.status === 'active' ? 'Активный' : lot.status === 'sold' ? 'Продан' : 'Завершён'}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Мои лоты */}
+                        {tab === 'lots' && (
+                            <div>
+                                <button onClick={() => navigate('create-lot')} className="w-full py-3 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-semibold mb-4 transition">
+                                    ➕ Создать лот
+                                </button>
+                                {lots.length === 0 ? (
+                                    <div className="bg-white/5 rounded-2xl p-8 text-center">
+                                        <div className="text-4xl mb-3">📦</div>
+                                        <p className="text-gray-400 mb-4">У вас пока нет лотов</p>
+                                    </div>
+                                ) : lots.map(lot => (
+                                    <div key={lot.id} className="bg-white/5 rounded-xl p-4 mb-3">
+                                        <div className="flex justify-between items-start">
+                                            <div>
+                                                <h4 className="text-white font-semibold">{lot.title}</h4>
+                                                <p className="text-gray-500 text-sm">{lot.category} • {lot.weight || 0}кг • {lot.description?.substring(0, 80)}</p>
+                                                <p className="text-gray-600 text-xs mt-1">{lot.createdAt?.toDate?.()?.toLocaleDateString('ru-RU') || ''}</p>
+                                            </div>
+                                            <div className="text-right shrink-0 ml-4">
+                                                <p className="text-emerald-400 font-bold">{lot.price?.toLocaleString()}₸</p>
+                                                <span className={`text-xs px-2 py-0.5 rounded-full ${lot.status === 'active' ? 'bg-emerald-500/20 text-emerald-400' : lot.status === 'sold' ? 'bg-blue-500/20 text-blue-400' : 'bg-gray-500/20 text-gray-400'}`}>
+                                                    {lot.status === 'active' ? 'Активный' : lot.status === 'sold' ? 'Продан' : 'Завершён'}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+                        {/* Профиль */}
+                        {tab === 'profile' && (
+                            <div className="bg-white/5 rounded-2xl p-6 space-y-4">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="text-gray-500 text-xs uppercase">Название отеля</label>
+                                        <p className="text-white font-medium">{d.hotelName}</p>
+                                    </div>
+                                    <div>
+                                        <label className="text-gray-500 text-xs uppercase">ИП/ТОО</label>
+                                        <p className="text-white font-medium">{d.ipName}</p>
+                                    </div>
+                                    <div>
+                                        <label className="text-gray-500 text-xs uppercase">БИН</label>
+                                        <p className="text-white font-medium">{d.bin}</p>
+                                    </div>
+                                    <div>
+                                        <label className="text-gray-500 text-xs uppercase">Контактное лицо</label>
+                                        <p className="text-white font-medium">{d.contactName}</p>
+                                    </div>
+                                    <div>
+                                        <label className="text-gray-500 text-xs uppercase">Должность</label>
+                                        <p className="text-white font-medium">{d.position || d.customPosition || '—'}</p>
+                                    </div>
+                                    <div>
+                                        <label className="text-gray-500 text-xs uppercase">Email</label>
+                                        <p className="text-white font-medium">{d.email}</p>
+                                    </div>
+                                    <div>
+                                        <label className="text-gray-500 text-xs uppercase">Телефон</label>
+                                        <p className="text-white font-medium">{d.phone}</p>
+                                    </div>
+                                    <div>
+                                        <label className="text-gray-500 text-xs uppercase">Google аккаунт</label>
+                                        <p className="text-white font-medium">{user?.email}</p>
+                                    </div>
+                                </div>
+                                <div className="pt-4 border-t border-white/10">
+                                    <p className="text-gray-500 text-sm">Для изменения данных свяжитесь с <button onClick={() => navigate('support')} className="text-emerald-400 hover:text-emerald-300 transition">поддержкой</button></p>
                                 </div>
                             </div>
                         )}
@@ -1354,12 +1739,12 @@
         }
 
         // Форма заявки для отеля
-        function HotelRequestForm({ navigate }) {
+        function HotelRequestForm({ navigate, user, loginWithGoogle }) {
             const [formData, setFormData] = useState({
                 hotelName: '',
                 ipName: '',
                 bin: '',
-                contactName: '',
+                contactName: user?.displayName || '',
                 position: '',
                 email: '',
                 phone: ''
@@ -1370,21 +1755,30 @@
             const [showTerms, setShowTerms] = useState(false);
 
             const validateEmail = (email) => {
+                if (!email || !email.includes('@')) {
+                    setEmailError('Введите корректный email');
+                    return false;
+                }
                 const publicDomains = ['gmail.com', 'mail.ru', 'yandex.ru', 'inbox.ru'];
                 const domain = email.split('@')[1];
                 if (publicDomains.includes(domain)) {
-                    setEmailError('Используйте корпоративный email отеля');
-                    return false;
+                    setEmailError('Рекомендуем корпоративный email (но можно и обычный)');
                 }
-                setEmailError('');
                 return true;
             };
 
-            const handleSubmit = (e) => {
+            const handleSubmit = async (e) => {
                 e.preventDefault();
                 if (!validateEmail(formData.email)) return;
                 if (!termsAccepted) return;
-                sendToTelegram('hotel', formData);
+                
+                const submitData = {
+                    ...formData,
+                    googleUid: user?.uid || null,
+                    googleEmail: user?.email || null,
+                    googleName: user?.displayName || null
+                };
+                await sendToTelegram('hotel', submitData);
                 setSubmitted(true);
             };
 
@@ -2575,7 +2969,7 @@
         }
 
         // Кабинет отеля
-        function Dashboard({ navigate }) {
+        function Dashboard({ navigate, isAdmin }) {
             return (
                 <div className="min-h-screen relative overflow-hidden">
                     <ParticlesBackground />
@@ -2592,7 +2986,7 @@
                                     <button onClick={() => navigate('marketplace')} className="text-gray-400 hover:text-white text-sm nav-link transition">Маркетплейс</button>
                                     <button onClick={() => navigate('requests')} className="text-gray-400 hover:text-white text-sm nav-link transition">Запросы</button>
                                     <button onClick={() => navigate('payouts')} className="text-gray-400 hover:text-white text-sm nav-link transition">Выплаты</button>
-                                    <button onClick={() => navigate('admin')} className="text-gray-400 hover:text-white text-sm nav-link transition">Админ</button>
+                                    {isAdmin && <button onClick={() => navigate('admin')} className="text-gray-400 hover:text-white text-sm nav-link transition">Админ</button>}
                                     <button onClick={() => navigate('landing')} className="text-gray-500 hover:text-gray-300 text-sm transition">Главная</button>
                                 </div>
                             </div>
@@ -2911,6 +3305,8 @@
         const db = firebase.firestore();
         const auth = firebase.auth();
         const googleProvider = new firebase.auth.GoogleAuthProvider();
+        // Сохраняем сессию — акк остаётся после перезагрузки
+        auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
 
         // ===== TELEGRAM WEBHOOK =====
         const TG_BOT_TOKEN = '8366887446:AAFSk-GGnyu51gZRSqGBfpcQg5yxvXBE68U';
@@ -3613,7 +4009,7 @@
         }
 
         // ===== АНАЛИТИКА С ДИАГРАММАМИ =====
-        function Analytics({ navigate }) {
+        function Analytics({ navigate, isAdmin }) {
             const chartRef1 = useRef(null);
             const chartRef2 = useRef(null);
             const chartRef3 = useRef(null);
@@ -3735,7 +4131,7 @@
                             </div>
                             <div className="flex items-center gap-3">
                                 <button onClick={downloadPDF} className="btn-gradient ripple-effect text-gray-900 px-5 py-2 rounded-xl font-bold text-xs">Скачать PDF</button>
-                                <button onClick={() => navigate('admin')} className="text-gray-400 hover:text-white text-sm nav-link transition">Админ</button>
+                                {isAdmin && <button onClick={() => navigate('admin')} className="text-gray-400 hover:text-white text-sm nav-link transition">Админ</button>}
                                 <button onClick={() => navigate('dashboard')} className="text-gray-400 hover:text-white text-sm nav-link transition">Кабинет</button>
                                 <button onClick={() => navigate('landing')} className="text-gray-400 hover:text-white text-sm nav-link transition">Главная</button>
                             </div>
