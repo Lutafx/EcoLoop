@@ -12,6 +12,12 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-auth-compat.js"></script>
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#10b981">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="apple-touch-icon" href="/icon-192.png">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap');
         
@@ -139,6 +145,45 @@
             border-color: rgba(142, 169, 154, 0.4);
         }
         
+        /* Мобильная нижняя навигация */
+        .mobile-nav {
+            display: none;
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            z-index: 1000;
+            background: rgba(10, 10, 10, 0.95);
+            backdrop-filter: blur(20px);
+            border-top: 1px solid rgba(142, 169, 154, 0.15);
+            padding: 8px 0 max(8px, env(safe-area-inset-bottom));
+        }
+        @media (max-width: 768px) {
+            .mobile-nav { display: flex; justify-content: space-around; align-items: center; }
+            body { padding-bottom: 80px; }
+        }
+        .mobile-nav-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 2px;
+            padding: 6px 12px;
+            color: #666;
+            font-size: 10px;
+            font-weight: 500;
+            transition: color 0.2s;
+            cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .mobile-nav-item.active { color: #10b981; }
+        .mobile-nav-item span { font-size: 20px; }
+
+        /* Адаптивные улучшения для телефонов */
+        @media (max-width: 640px) {
+            .hero-title { font-size: 2rem !important; }
+            .hero-subtitle { font-size: 0.875rem !important; }
+        }
+
         /* Ripple эффект при клике */
         @keyframes ripple-anim {
             0% { transform: scale(0); opacity: 0.5; }
@@ -673,37 +718,211 @@
             const [currentPage, setCurrentPage] = useState('landing');
             const [userRole, setUserRole] = useState(null);
             const [selectedLot, setSelectedLot] = useState(null);
+            const [user, setUser] = useState(null);
+            const [authLoading, setAuthLoading] = useState(true);
+
+            // Слушаем состояние авторизации
+            useEffect(() => {
+                const unsub = auth.onAuthStateChanged(async (u) => {
+                    setUser(u);
+                    setAuthLoading(false);
+                    if (u) {
+                        // Сохраняем/обновляем профиль в Firestore
+                        try {
+                            await db.collection('users').doc(u.uid).set({
+                                email: u.email,
+                                name: u.displayName,
+                                photo: u.photoURL,
+                                lastLogin: firebase.firestore.FieldValue.serverTimestamp()
+                            }, { merge: true });
+                        } catch (e) { console.error('User save err:', e); }
+                    }
+                });
+                return () => unsub();
+            }, []);
+
+            // Регистрация PWA Service Worker
+            useEffect(() => {
+                if ('serviceWorker' in navigator) {
+                    navigator.serviceWorker.register('/sw.js').catch(() => {});
+                }
+            }, []);
 
             const navigate = (page, data = null) => {
                 setCurrentPage(page);
                 if (data) setSelectedLot(data);
+                window.scrollTo(0, 0);
             };
 
             const selectRole = (role) => {
                 setUserRole(role);
                 if (role === 'buyer') {
-                    setCurrentPage('buyer-register');
+                    if (user) {
+                        setCurrentPage('marketplace');
+                    } else {
+                        setCurrentPage('buyer-register');
+                    }
                 } else {
                     setCurrentPage('hotel-request');
                 }
             };
 
+            const loginWithGoogle = async () => {
+                try {
+                    await auth.signInWithPopup(googleProvider);
+                    setCurrentPage('marketplace');
+                } catch (e) {
+                    console.error('Google login err:', e);
+                    alert('Ошибка входа через Google. Попробуйте еще раз.');
+                }
+            };
+
+            const logout = async () => {
+                await auth.signOut();
+                setUser(null);
+                setCurrentPage('landing');
+            };
+
+            if (authLoading) {
+                return React.createElement('div', {
+                    className: 'min-h-screen bg-[#0a0a0a] flex items-center justify-center'
+                }, React.createElement('div', {
+                    className: 'text-emerald-400 text-xl animate-pulse'
+                }, '🌿 EcoLoop загружается...'));
+            }
+
             return (
                 <div>
                     {currentPage === 'role-select' && <RoleSelect selectRole={selectRole} navigate={navigate} />}
-                    {currentPage === 'buyer-register' && <BuyerRegister navigate={navigate} />}
+                    {currentPage === 'buyer-register' && <BuyerRegister navigate={navigate} loginWithGoogle={loginWithGoogle} user={user} />}
                     {currentPage === 'hotel-request' && <HotelRequestForm navigate={navigate} />}
-                    {currentPage === 'landing' && <Landing navigate={navigate} />}
-                    {currentPage === 'marketplace' && <Marketplace navigate={navigate} />}
+                    {currentPage === 'landing' && <Landing navigate={navigate} user={user} logout={logout} />}
+                    {currentPage === 'marketplace' && <Marketplace navigate={navigate} user={user} logout={logout} />}
                     {currentPage === 'requests' && <Requests navigate={navigate} />}
-                    {currentPage === 'dashboard' && <Dashboard navigate={navigate} />}
+                    {currentPage === 'dashboard' && <Dashboard navigate={navigate} user={user} logout={logout} />}
                     {currentPage === 'create-lot' && <CreateLot navigate={navigate} />}
                     {currentPage === 'create-request' && <CreateRequest navigate={navigate} />}
-                    {currentPage === 'lot-detail' && <LotDetail navigate={navigate} lot={selectedLot} />}
+                    {currentPage === 'lot-detail' && <LotDetail navigate={navigate} lot={selectedLot} user={user} />}
                     {currentPage === 'payouts' && <SellerPayouts navigate={navigate} />}
                     {currentPage === 'admin' && <AdminPanel navigate={navigate} />}
-                    {currentPage === 'buyer-profile' && <BuyerProfile navigate={navigate} />}
+                    {currentPage === 'buyer-profile' && <BuyerProfile navigate={navigate} user={user} logout={logout} />}
                     {currentPage === 'analytics' && <Analytics navigate={navigate} />}
+                    {currentPage === 'account' && <AccountPage navigate={navigate} user={user} logout={logout} />}
+
+                    {/* Мобильная навигация — показывается только на телефонах */}
+                    {!['landing', 'role-select', 'buyer-register', 'hotel-request'].includes(currentPage) && (
+                        <div className="mobile-nav">
+                            <div className={`mobile-nav-item ${currentPage === 'marketplace' ? 'active' : ''}`} onClick={() => navigate('marketplace')}>
+                                <span>🛍️</span>Лоты
+                            </div>
+                            <div className={`mobile-nav-item ${currentPage === 'requests' ? 'active' : ''}`} onClick={() => navigate('requests')}>
+                                <span>📋</span>Запросы
+                            </div>
+                            <div className={`mobile-nav-item ${currentPage === 'dashboard' ? 'active' : ''}`} onClick={() => navigate('dashboard')}>
+                                <span>📊</span>Обзор
+                            </div>
+                            <div className={`mobile-nav-item ${currentPage === 'account' ? 'active' : ''}`} onClick={() => navigate(user ? 'account' : 'buyer-register')}>
+                                <span>{user ? '👤' : '🔑'}</span>{user ? 'Кабинет' : 'Войти'}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        // Личный кабинет покупателя
+        function AccountPage({ navigate, user, logout }) {
+            const [orders, setOrders] = useState([]);
+            const [tab, setTab] = useState('orders');
+
+            useEffect(() => {
+                if (user) {
+                    db.collection('orders').where('userId', '==', user.uid).orderBy('createdAt', 'desc').limit(20).get()
+                        .then(snap => setOrders(snap.docs.map(d => ({ id: d.id, ...d.data() }))))
+                        .catch(() => {});
+                }
+            }, [user]);
+
+            if (!user) return (
+                <div className="min-h-screen bg-[#0a0a0a] flex items-center justify-center p-4">
+                    <div className="bg-white/5 rounded-2xl p-8 max-w-md w-full text-center">
+                        <div className="text-6xl mb-4">🔒</div>
+                        <h2 className="text-2xl font-bold text-white mb-4">Войдите в аккаунт</h2>
+                        <p className="text-gray-400 mb-6">Для доступа к личному кабинету необходимо войти через Google</p>
+                        <button onClick={() => navigate('buyer-register')} className="w-full py-3 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-semibold transition">
+                            Войти через Google
+                        </button>
+                        <button onClick={() => navigate('landing')} className="w-full mt-3 py-3 bg-white/5 hover:bg-white/10 text-gray-300 rounded-xl transition">
+                            На главную
+                        </button>
+                    </div>
+                </div>
+            );
+
+            return (
+                <div className="min-h-screen bg-[#0a0a0a] p-4 md:p-8">
+                    <div className="max-w-4xl mx-auto">
+                        <div className="flex items-center justify-between mb-6">
+                            <button onClick={() => navigate('marketplace')} className="text-gray-400 hover:text-white transition">◀️ Назад</button>
+                            <button onClick={logout} className="text-red-400 hover:text-red-300 text-sm transition">Выйти</button>
+                        </div>
+                        <div className="bg-white/5 rounded-2xl p-6 mb-6">
+                            <div className="flex items-center gap-4">
+                                <img src={user.photoURL || 'https://ui-avatars.com/api/?name=' + user.displayName} alt="" className="w-16 h-16 rounded-full" />
+                                <div>
+                                    <h2 className="text-xl font-bold text-white">{user.displayName}</h2>
+                                    <p className="text-gray-400 text-sm">{user.email}</p>
+                                    <span className="inline-block mt-1 px-2 py-0.5 bg-emerald-500/20 text-emerald-400 rounded-full text-xs">Покупатель</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="flex gap-2 mb-6 overflow-x-auto pb-2">
+                            {[['orders', '📦 Заказы'], ['favorites', '❤️ Избранное'], ['settings', '⚙️ Настройки']].map(([key, label]) => (
+                                <button key={key} onClick={() => setTab(key)} className={`px-4 py-2 rounded-xl text-sm font-medium whitespace-nowrap transition ${tab === key ? 'bg-emerald-500 text-white' : 'bg-white/5 text-gray-400 hover:bg-white/10'}`}>{label}</button>
+                            ))}
+                        </div>
+                        {tab === 'orders' && (
+                            <div>
+                                {orders.length === 0 ? (
+                                    <div className="bg-white/5 rounded-2xl p-8 text-center">
+                                        <div className="text-4xl mb-3">📦</div>
+                                        <p className="text-gray-400 mb-4">У вас пока нет заказов</p>
+                                        <button onClick={() => navigate('marketplace')} className="px-6 py-2 bg-emerald-500 text-white rounded-xl">Перейти к лотам</button>
+                                    </div>
+                                ) : orders.map(o => (
+                                    <div key={o.id} className="bg-white/5 rounded-xl p-4 mb-3">
+                                        <div className="flex justify-between items-center">
+                                            <span className="text-white font-medium">{o.lotTitle || 'Заказ'}</span>
+                                            <span className={`px-2 py-0.5 rounded-full text-xs ${o.status === 'completed' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-yellow-500/20 text-yellow-400'}`}>{o.status === 'completed' ? 'Получен' : 'В обработке'}</span>
+                                        </div>
+                                        <p className="text-gray-500 text-sm mt-1">{o.createdAt?.toDate?.()?.toLocaleDateString('ru-RU') || ''}</p>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                        {tab === 'favorites' && (
+                            <div className="bg-white/5 rounded-2xl p-8 text-center">
+                                <div className="text-4xl mb-3">❤️</div>
+                                <p className="text-gray-400">Избранные лоты появятся здесь</p>
+                            </div>
+                        )}
+                        {tab === 'settings' && (
+                            <div className="bg-white/5 rounded-2xl p-6 space-y-4">
+                                <div>
+                                    <label className="text-gray-400 text-sm">Имя</label>
+                                    <p className="text-white">{user.displayName}</p>
+                                </div>
+                                <div>
+                                    <label className="text-gray-400 text-sm">Email</label>
+                                    <p className="text-white">{user.email}</p>
+                                </div>
+                                <div>
+                                    <label className="text-gray-400 text-sm">Уведомления</label>
+                                    <p className="text-emerald-400 text-sm">Включены (Telegram бот)</p>
+                                </div>
+                            </div>
+                        )}
+                    </div>
                 </div>
             );
         }
@@ -934,18 +1153,34 @@
         ];
 
         // Регистрация покупателя
-        function BuyerRegister({ navigate }) {
+        function BuyerRegister({ navigate, loginWithGoogle, user }) {
             const [form, setForm] = useState({ surname: '', name: '', patronymic: '', phone: '', email: '', city: '' });
             const [showTerms, setShowTerms] = useState(false);
             const [termsAccepted, setTermsAccepted] = useState(false);
             const [registered, setRegistered] = useState(false);
             const [toast, setToast] = useState(null);
+            const [googleLoading, setGoogleLoading] = useState(false);
+
+            // Если уже залогинен — сразу на маркетплейс
+            useEffect(() => {
+                if (user) navigate('marketplace');
+            }, [user]);
 
             const isValid = termsAccepted && form.surname && form.name && form.phone && form.email && form.city;
+
+            const handleGoogleLogin = async () => {
+                setGoogleLoading(true);
+                try {
+                    await loginWithGoogle();
+                } catch (e) {
+                    setGoogleLoading(false);
+                }
+            };
 
             const handleSubmit = (e) => {
                 e.preventDefault();
                 if (!termsAccepted) { setShowTerms(true); return; }
+                sendToTelegram('buyer', form);
                 setRegistered(true);
                 setToast('Регистрация успешна!');
             };
@@ -979,8 +1214,22 @@
                     <div className="relative z-10 max-w-lg mx-auto px-4 py-14">
                         <div className="text-center mb-8">
                             <button onClick={() => navigate('landing')} className="text-sm text-gray-500 hover:text-gray-300 transition mb-6 inline-block">← На главную</button>
-                            <h1 className="text-3xl font-black text-white mb-2">Регистрация покупателя</h1>
+                            <h1 className="text-3xl font-black text-white mb-2">Вход / Регистрация</h1>
                             <p className="text-gray-500 text-sm">Получите доступ к маркетплейсу со скидками до 70%</p>
+                        </div>
+
+                        <div className="mb-6 p-6 rounded-2xl border border-white/10" style={{background: 'rgba(255,255,255,0.02)'}}>
+                            <button onClick={handleGoogleLogin} disabled={googleLoading} className="w-full flex items-center justify-center gap-3 py-3.5 bg-white hover:bg-gray-100 text-gray-800 rounded-xl font-semibold transition disabled:opacity-50">
+                                <svg width="20" height="20" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+                                {googleLoading ? 'Входим...' : 'Войти через Google'}
+                            </button>
+                            <p className="text-center text-gray-600 text-xs mt-3">Быстрый вход — 1 клик. Данные защищены.</p>
+                        </div>
+
+                        <div className="flex items-center gap-3 mb-6">
+                            <div className="flex-1 h-px bg-white/10"></div>
+                            <span className="text-gray-600 text-xs">или заполните форму</span>
+                            <div className="flex-1 h-px bg-white/10"></div>
                         </div>
 
                         <form onSubmit={handleSubmit} className="space-y-4 p-8 rounded-2xl border border-white/10" style={{background: 'rgba(255,255,255,0.02)'}}>
@@ -2626,6 +2875,8 @@
         };
         firebase.initializeApp(firebaseConfig);
         const db = firebase.firestore();
+        const auth = firebase.auth();
+        const googleProvider = new firebase.auth.GoogleAuthProvider();
 
         // ===== TELEGRAM WEBHOOK =====
         const TG_BOT_TOKEN = '8547995948:AAGP-JDNJowAvmTqMK04n9rNZ16519dp2C8';
