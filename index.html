@@ -2652,7 +2652,7 @@
                 console.error('❌ Ошибка Firestore:', err);
             }
 
-            // Отправляем через бота (с кнопками одобрения)
+            // Отправляем ТОЛЬКО через бота (с кнопками одобрения)
             const BOT_API = 'https://ecoloop-idd1.onrender.com';
             try {
                 const res = await fetch(`${BOT_API}/api/submit`, {
@@ -2663,18 +2663,8 @@
                 const result = await res.json();
                 console.log('✅ Отправлено через бота:', result);
             } catch (err) {
-                console.warn('Bot API failed, fallback to direct TG:', err);
-                // Фолбэк: напрямую в Telegram
-                let text = `${labels[type] || '📩 Новая заявка'}\n\n`;
-                Object.entries(data).forEach(([k, v]) => {
-                    if (v && typeof v === 'string') text += `${k}: ${v}\n`;
-                });
-                text += `\n🕐 ${new Date().toLocaleString('ru-RU')}`;
-                fetch(`https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ chat_id: TG_CHAT_ID, text, parse_mode: 'HTML' })
-                }).catch(e => console.warn('TG fallback failed:', e));
+                console.error('❌ Ошибка отправки через бота:', err);
+                alert('Ошибка отправки заявки. Попробуйте позже.');
             }
         }
 
