@@ -1,2 +1,2 @@
-// Wrapper: запускает worker-bot.js из корня проекта
-require('../worker-bot.js');
+// Wrapper: запускает worker-bot.js из папки bot
+require('./worker-bot.js');
