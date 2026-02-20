@@ -808,6 +808,7 @@
                     {currentPage === 'buyer-profile' && <BuyerProfile navigate={navigate} user={user} logout={logout} />}
                     {currentPage === 'analytics' && <Analytics navigate={navigate} />}
                     {currentPage === 'account' && <AccountPage navigate={navigate} user={user} logout={logout} />}
+                    {currentPage === 'support' && <SupportPage navigate={navigate} user={user} />}
 
                     {/* Мобильная навигация — показывается только на телефонах */}
                     {!['landing', 'role-select', 'buyer-register', 'hotel-request'].includes(currentPage) && (
@@ -815,8 +816,8 @@
                             <div className={`mobile-nav-item ${currentPage === 'marketplace' ? 'active' : ''}`} onClick={() => navigate('marketplace')}>
                                 <span>🛍️</span>Лоты
                             </div>
-                            <div className={`mobile-nav-item ${currentPage === 'requests' ? 'active' : ''}`} onClick={() => navigate('requests')}>
-                                <span>📋</span>Запросы
+                            <div className={`mobile-nav-item ${currentPage === 'support' ? 'active' : ''}`} onClick={() => navigate('support')}>
+                                <span>💬</span>Поддержка
                             </div>
                             <div className={`mobile-nav-item ${currentPage === 'dashboard' ? 'active' : ''}`} onClick={() => navigate('dashboard')}>
                                 <span>📊</span>Обзор
@@ -2127,7 +2128,8 @@
                                     <span className="text-xl font-bold text-white">EcoLoop</span>
                                 </button>
                                 <div className="flex items-center gap-4">
-                                    <button onClick={() => navigate('buyer-profile')} className="text-gray-400 hover:text-white text-sm nav-link transition">Профиль</button>
+                                    <button onClick={() => navigate('support')} className="text-gray-400 hover:text-white text-sm nav-link transition hidden sm:block">Поддержка</button>
+                                    <button onClick={() => navigate('buyer-profile')} className="text-gray-400 hover:text-white text-sm nav-link transition hidden sm:block">Профиль</button>
                                     <button onClick={() => navigate('dashboard')} className="text-gray-400 hover:text-white text-sm nav-link transition">Кабинет</button>
                                     <button onClick={() => navigate('landing')} className="text-gray-500 hover:text-gray-300 text-sm transition">Главная</button>
                                 </div>
@@ -2911,7 +2913,7 @@
         const googleProvider = new firebase.auth.GoogleAuthProvider();
 
         // ===== TELEGRAM WEBHOOK =====
-        const TG_BOT_TOKEN = '8547995948:AAGP-JDNJowAvmTqMK04n9rNZ16519dp2C8';
+        const TG_BOT_TOKEN = '8366887446:AAFSk-GGnyu51gZRSqGBfpcQg5yxvXBE68U';
         const TG_CHAT_ID = '7682446178';
 
         async function sendToTelegram(type, data) {
@@ -2919,7 +2921,10 @@
                 callback: '📞 Обратный звонок',
                 hotel: '🏨 Заявка отеля',
                 request: '📋 Новый запрос',
-                buyer: '👤 Регистрация покупателя'
+                buyer: '👤 Регистрация покупателя',
+                support: '🛟 Обращение в поддержку',
+                complaint: '🚨 Жалоба',
+                suggestion: '💡 Предложение'
             };
             
             // Сохраняем в Firestore
@@ -2951,8 +2956,185 @@
             }
         }
 
+        // ===== СТРАНИЦА ПОДДЕРЖКИ =====
+        function SupportPage({ navigate, user }) {
+            const [tab, setTab] = useState('support');
+            const [form, setForm] = useState({ name: user?.displayName || '', email: user?.email || '', phone: '', subject: '', message: '' });
+            const [sent, setSent] = useState(false);
+            const [toast, setToast] = useState(null);
+            const [sending, setSending] = useState(false);
+
+            const handleSubmit = async (e) => {
+                e.preventDefault();
+                if (!form.message.trim()) return;
+                setSending(true);
+                try {
+                    await sendToTelegram(tab, {
+                        ...form,
+                        category: tab === 'support' ? 'Поддержка' : tab === 'complaint' ? 'Жалоба' : 'Предложение',
+                        userId: user?.uid || 'guest',
+                        userEmail: user?.email || form.email
+                    });
+                    setSent(true);
+                    setToast('Отправлено! Мы ответим в ближайшее время.');
+                } catch (err) {
+                    setToast('Ошибка отправки');
+                }
+                setSending(false);
+            };
+
+            const inputCls = "w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder-gray-600 focus:outline-none focus:border-emerald-500/50 transition text-sm";
+
+            if (sent) return (
+                <div className="min-h-screen bg-[#0a0a0a] flex items-center justify-center p-4">
+                    {toast && <Toast message={toast} onClose={() => setToast(null)} />}
+                    <div className="bg-white/5 rounded-2xl p-8 max-w-md w-full text-center border border-white/10">
+                        <div className="text-5xl mb-4">✅</div>
+                        <h2 className="text-2xl font-bold text-white mb-2">Отправлено!</h2>
+                        <p className="text-gray-400 text-sm mb-2">Мы получили ваше обращение и ответим в ближайшее время.</p>
+                        <p className="text-gray-500 text-sm mb-6">Также можете написать напрямую:</p>
+                        <a href="https://t.me/lutafx" target="_blank" className="inline-flex items-center gap-2 px-6 py-3 bg-[#2AABEE]/20 text-[#2AABEE] rounded-xl font-semibold hover:bg-[#2AABEE]/30 transition mb-4">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12s5.37 12 12 12 12-5.37 12-12S18.63 0 12 0zm5.94 8.13l-1.97 9.28c-.15.67-.54.83-1.09.52l-3.02-2.23-1.46 1.4c-.16.16-.3.3-.61.3l.22-3.06 5.56-5.02c.24-.22-.05-.34-.38-.13l-6.87 4.33-2.96-.92c-.64-.2-.66-.64.13-.95l11.58-4.46c.54-.2 1.01.13.87.94z"/></svg>
+                            @lutafx
+                        </a>
+                        <div className="space-y-2">
+                            <button onClick={() => { setSent(false); setForm({...form, subject: '', message: ''}); }} className="w-full py-3 bg-white/5 text-gray-300 rounded-xl hover:bg-white/10 transition text-sm">Написать ещё</button>
+                            <button onClick={() => navigate('marketplace')} className="w-full py-3 text-gray-500 hover:text-gray-300 text-sm transition">На маркетплейс</button>
+                        </div>
+                    </div>
+                </div>
+            );
+
+            return (
+                <div className="min-h-screen bg-[#0a0a0a]">
+                    {toast && <Toast message={toast} onClose={() => setToast(null)} />}
+
+                    <header className="sticky top-0 z-50 bg-[#0a0a0a]/95 backdrop-blur-xl border-b border-white/10">
+                        <div className="max-w-3xl mx-auto px-4 py-3 flex justify-between items-center">
+                            <div className="flex items-center gap-3">
+                                <div className="w-9 h-9 rounded-xl flex items-center justify-center text-lg" style={{background: 'linear-gradient(135deg, #10b981, #059669)'}}>💬</div>
+                                <span className="text-lg font-bold text-white">Поддержка</span>
+                            </div>
+                            <button onClick={() => navigate('marketplace')} className="text-gray-500 hover:text-white text-sm transition">← Назад</button>
+                        </div>
+                    </header>
+
+                    <div className="max-w-3xl mx-auto px-4 py-6">
+                        {/* Быстрый контакт */}
+                        <div className="p-5 rounded-2xl border border-[#2AABEE]/20 mb-6" style={{background: 'rgba(42,171,238,0.05)'}}>
+                            <div className="flex flex-col sm:flex-row items-center gap-4">
+                                <div className="text-4xl">📱</div>
+                                <div className="flex-1 text-center sm:text-left">
+                                    <h3 className="text-white font-semibold">Быстрая связь через Telegram</h3>
+                                    <p className="text-gray-400 text-sm mt-1">Напишите напрямую — отвечаем в течение часа</p>
+                                </div>
+                                <a href="https://t.me/lutafx" target="_blank" className="px-5 py-2.5 bg-[#2AABEE] hover:bg-[#2AABEE]/80 text-white rounded-xl font-semibold transition flex items-center gap-2 text-sm">
+                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12s5.37 12 12 12 12-5.37 12-12S18.63 0 12 0zm5.94 8.13l-1.97 9.28c-.15.67-.54.83-1.09.52l-3.02-2.23-1.46 1.4c-.16.16-.3.3-.61.3l.22-3.06 5.56-5.02c.24-.22-.05-.34-.38-.13l-6.87 4.33-2.96-.92c-.64-.2-.66-.64.13-.95l11.58-4.46c.54-.2 1.01.13.87.94z"/></svg>
+                                    @lutafx
+                                </a>
+                            </div>
+                        </div>
+
+                        {/* Табы */}
+                        <div className="flex gap-2 mb-6">
+                            {[
+                                { v: 'support', l: '🛟 Поддержка', desc: 'Вопрос или проблема' },
+                                { v: 'complaint', l: '🚨 Жалоба', desc: 'Сообщить о нарушении' },
+                                { v: 'suggestion', l: '💡 Предложение', desc: 'Идея или пожелание' }
+                            ].map(t => (
+                                <button key={t.v} onClick={() => setTab(t.v)} className={`flex-1 py-3 px-4 rounded-xl text-sm font-medium transition ${tab === t.v ? 'bg-emerald-500 text-white' : 'bg-white/5 text-gray-400 hover:bg-white/10'}`}>
+                                    {t.l}
+                                </button>
+                            ))}
+                        </div>
+
+                        {/* Форма */}
+                        <form onSubmit={handleSubmit} className="p-6 rounded-2xl border border-white/10 space-y-4" style={{background: 'rgba(255,255,255,0.02)'}}>
+                            <h3 className="text-white font-semibold text-lg mb-2">
+                                {tab === 'support' ? '🛟 Написать в поддержку' : tab === 'complaint' ? '🚨 Отправить жалобу' : '💡 Предложить идею'}
+                            </h3>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-sm text-gray-400 mb-1">Имя</label>
+                                    <input type="text" value={form.name} onChange={e => setForm({...form, name: e.target.value})} placeholder="Ваше имя" className={inputCls} />
+                                </div>
+                                <div>
+                                    <label className="block text-sm text-gray-400 mb-1">Email</label>
+                                    <input type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} placeholder="email@example.com" className={inputCls} />
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-sm text-gray-400 mb-1">Телефон (необязательно)</label>
+                                <input type="tel" value={form.phone} onChange={e => setForm({...form, phone: e.target.value})} placeholder="+7 (777) 123-45-67" className={inputCls} />
+                            </div>
+
+                            <div>
+                                <label className="block text-sm text-gray-400 mb-1">Тема *</label>
+                                <input type="text" required value={form.subject} onChange={e => setForm({...form, subject: e.target.value})} placeholder={tab === 'complaint' ? 'Опишите проблему кратко' : tab === 'suggestion' ? 'Название идеи' : 'О чём вопрос?'} className={inputCls} />
+                            </div>
+
+                            <div>
+                                <label className="block text-sm text-gray-400 mb-1">Сообщение *</label>
+                                <textarea required value={form.message} onChange={e => setForm({...form, message: e.target.value})} rows="5" placeholder={tab === 'complaint' ? 'Подробно опишите ситуацию: что произошло, когда, номер заказа...' : tab === 'suggestion' ? 'Опишите вашу идею подробнее...' : 'Чем мы можем помочь?'} className={inputCls} style={{resize: 'vertical'}} />
+                            </div>
+
+                            <button type="submit" disabled={sending || !form.message.trim() || !form.subject.trim()} className={`w-full py-3.5 rounded-xl font-semibold transition text-sm ${!sending && form.message.trim() && form.subject.trim() ? 'bg-emerald-500 hover:bg-emerald-600 text-white' : 'bg-gray-800 text-gray-600 cursor-not-allowed'}`}>
+                                {sending ? 'Отправляем...' : tab === 'complaint' ? '🚨 Отправить жалобу' : tab === 'suggestion' ? '💡 Отправить предложение' : '🛟 Отправить в поддержку'}
+                            </button>
+                        </form>
+
+                        {/* FAQ */}
+                        <div className="mt-8 p-6 rounded-2xl border border-white/10" style={{background: 'rgba(255,255,255,0.02)'}}>
+                            <h3 className="text-white font-semibold mb-4">❓ Частые вопросы</h3>
+                            <div className="space-y-3">
+                                {[
+                                    { q: 'Как долго ждать ответ?', a: 'Обычно отвечаем в течение 1-2 часов в рабочее время (9:00-18:00).' },
+                                    { q: 'Можно ли вернуть товар?', a: 'Да, возврат возможен в течение 2 часов после получения.' },
+                                    { q: 'Как оплатить заказ?', a: 'Kaspi QR, банковская карта (Visa/MC) или наличные при самовывозе.' },
+                                    { q: 'Как подключить отель?', a: 'Заполните заявку на сайте. Необходим БИН и наименование ИП.' },
+                                    { q: 'Где работает EcoLoop?', a: 'Алматы и Астана. Скоро — Шымкент и Караганда.' }
+                                ].map((f, i) => (
+                                    <details key={i} className="group">
+                                        <summary className="flex items-center justify-between p-3 rounded-xl bg-white/5 cursor-pointer text-sm text-gray-300 hover:bg-white/10 transition">
+                                            {f.q}
+                                            <span className="text-gray-600 group-open:rotate-180 transition-transform">▼</span>
+                                        </summary>
+                                        <p className="text-gray-500 text-sm px-3 pt-2 pb-1">{f.a}</p>
+                                    </details>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Контакты */}
+                        <div className="mt-6 p-6 rounded-2xl border border-white/10" style={{background: 'rgba(255,255,255,0.02)'}}>
+                            <h3 className="text-white font-semibold mb-4">📞 Контакты</h3>
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                <a href="https://t.me/lutafx" target="_blank" className="p-4 rounded-xl bg-white/5 hover:bg-white/10 text-center transition">
+                                    <div className="text-2xl mb-2">💬</div>
+                                    <div className="text-white text-sm font-medium">Telegram</div>
+                                    <div className="text-gray-500 text-xs">@lutafx</div>
+                                </a>
+                                <a href="mailto:querty482901@gmail.com" className="p-4 rounded-xl bg-white/5 hover:bg-white/10 text-center transition">
+                                    <div className="text-2xl mb-2">📧</div>
+                                    <div className="text-white text-sm font-medium">Email</div>
+                                    <div className="text-gray-500 text-xs">querty482901@gmail.com</div>
+                                </a>
+                                <a href="tel:+77760752463" className="p-4 rounded-xl bg-white/5 hover:bg-white/10 text-center transition">
+                                    <div className="text-2xl mb-2">📱</div>
+                                    <div className="text-white text-sm font-medium">Телефон</div>
+                                    <div className="text-gray-500 text-xs">+7 (776) 075-24-63</div>
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
         // ===== АДМИН-ПАНЕЛЬ =====
-        const ADMIN_EMAILS = ['malikoffalikhan@gmail.com'];
+        const ADMIN_EMAILS = ['querty482901@gmail.com'];
 
         function AdminPanel({ navigate, user, logout, loginWithGoogle }) {
             const [tab, setTab] = useState('submissions');
@@ -3099,8 +3281,8 @@
                         {/* Stats */}
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
                             {[
-                                { l: 'Заявки', v: submissions.length, icon: '📋', c: 'emerald' },
-                                { l: 'Пользователи', v: users.length, icon: '👥', c: 'blue' },
+                                { l: 'Заявки', v: submissions.filter(s => !['support','complaint','suggestion'].includes(s.type)).length, icon: '📋', c: 'emerald' },
+                                { l: 'Поддержка', v: submissions.filter(s => ['support','complaint','suggestion'].includes(s.type)).length, icon: '💬', c: 'blue' },
                                 { l: 'Вакансии', v: vacancies.length, icon: '💼', c: 'amber' },
                                 { l: 'Ожидают', v: submissions.filter(s => s.status === 'new').length, icon: '⏳', c: 'orange' }
                             ].map((s, i) => (
@@ -3115,6 +3297,7 @@
                         <div className="flex gap-2 mb-6 overflow-x-auto pb-2">
                             {[
                                 { v: 'submissions', l: '📋 Заявки' },
+                                { v: 'support_tab', l: '💬 Поддержка' },
                                 { v: 'users', l: '👥 Пользователи' },
                                 { v: 'vacancies', l: '💼 Вакансии' },
                                 { v: 'settings', l: '⚙️ Настройки' }
@@ -3158,6 +3341,49 @@
                                         </div>
                                     </div>
                                 ))}
+                            </div>
+                        )}
+
+                        {/* === ПОДДЕРЖКА === */}
+                        {tab === 'support_tab' && (
+                            <div className="space-y-3">
+                                {(() => {
+                                    const supportItems = submissions.filter(s => ['support','complaint','suggestion'].includes(s.type));
+                                    if (supportItems.length === 0) return (
+                                        <div className="p-8 rounded-2xl border border-white/5 text-center" style={card}>
+                                            <div className="text-4xl mb-3">💬</div>
+                                            <p className="text-gray-400">Обращений в поддержку пока нет</p>
+                                        </div>
+                                    );
+                                    return supportItems.map(s => (
+                                        <div key={s.id} className="p-4 rounded-2xl border border-white/5" style={card}>
+                                            <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="flex items-center gap-2 mb-2">
+                                                        <span className="text-lg">{s.type === 'complaint' ? '🚨' : s.type === 'suggestion' ? '💡' : '🛟'}</span>
+                                                        <span className="text-white font-semibold text-sm">{s.data?.subject || s.type}</span>
+                                                        <span className={`px-2 py-0.5 rounded-full text-xs ${s.status === 'approved' ? 'bg-emerald-500/20 text-emerald-400' : s.status === 'rejected' ? 'bg-red-500/20 text-red-400' : 'bg-yellow-500/20 text-yellow-400'}`}>
+                                                            {s.status === 'approved' ? 'Решено' : s.status === 'rejected' ? 'Отклонено' : 'Новое'}
+                                                        </span>
+                                                    </div>
+                                                    {s.data?.message && <p className="text-gray-400 text-sm mb-2">{s.data.message}</p>}
+                                                    <div className="text-xs text-gray-600 space-x-3">
+                                                        {s.data?.name && <span>👤 {s.data.name}</span>}
+                                                        {s.data?.email && <span>📧 {s.data.email}</span>}
+                                                        {s.data?.phone && <span>📱 {s.data.phone}</span>}
+                                                    </div>
+                                                    <div className="text-xs text-gray-600 mt-1">{s.createdAt?.toDate?.()?.toLocaleString('ru-RU') || ''}</div>
+                                                </div>
+                                                {s.status === 'new' && (
+                                                    <div className="flex gap-2 shrink-0">
+                                                        <button onClick={() => updateSubmission(s.id, 'approved')} className={btnG}>✅ Решено</button>
+                                                        <button onClick={() => updateSubmission(s.id, 'rejected')} className={btnR}>❌ Отклонить</button>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    ));
+                                })()}
                             </div>
                         )}
 
