@@ -1,6 +1,7 @@
 // ====================================
-// EcoLoop Telegram Bot v3.0 — Express.js (Render)
-// Одобрения отелей/постов + inline кнопки + антиспам
+// EcoLoop Telegram Bot v4.0 — Express.js (Render)
+// Все заявки с кнопками Принять/Отклонить
+// Чистый plain text — без parse_mode проблем
 // ====================================
 
 const express = require('express');
@@ -14,23 +15,19 @@ const TG_CHAT  = '7682446178';
 const TG_API   = `https://api.telegram.org/bot${TG_TOKEN}`;
 const PORT = process.env.PORT || 3000;
 
-// ===== АДМИНЫ (только эти chat_id могут использовать /admin команды) =====
-const ADMINS = [
-  7682446178,  // Маликов Алихан (основной)
-];
+const ADMINS = [7682446178];
 
-// ===== ХРАНИЛИЩЕ (в памяти) =====
+// Хранилище
 const rateLimit = new Map();
 const pendingApprovals = new Map();
 let approvalCounter = 0;
-
 const RATE_LIMIT_MAX = 10;
 const RATE_LIMIT_WINDOW = 60000;
 
 function isRateLimited(chatId) {
   const now = Date.now();
-  const userHits = rateLimit.get(chatId) || [];
-  const recent = userHits.filter(t => now - t < RATE_LIMIT_WINDOW);
+  const hits = rateLimit.get(chatId) || [];
+  const recent = hits.filter(t => now - t < RATE_LIMIT_WINDOW);
   recent.push(now);
   rateLimit.set(chatId, recent);
   return recent.length > RATE_LIMIT_MAX;
@@ -40,7 +37,19 @@ function isAdmin(chatId) {
   return ADMINS.includes(chatId);
 }
 
-// ===== CORS =====
+function fmtData(data) {
+  let t = '';
+  for (const [k, v] of Object.entries(data)) {
+    if (v) t += `${k}: ${v}\n`;
+  }
+  return t;
+}
+
+function ts() {
+  return new Date().toLocaleString('ru-RU');
+}
+
+// CORS
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
@@ -49,99 +58,56 @@ app.use((req, res, next) => {
   next();
 });
 
-// ===== HEALTH CHECK (UptimeRobot) =====
+// Health check
 app.get('/', (req, res) => {
-  res.json({
-    bot: 'EcoLoop Bot v3.0',
-    status: 'running',
-    uptime: new Date().toISOString(),
-    pending: pendingApprovals.size
-  });
+  res.json({ bot: 'EcoLoop Bot v4.0', status: 'running', uptime: new Date().toISOString(), pending: pendingApprovals.size });
 });
 
 // ===== TELEGRAM WEBHOOK =====
 app.post('/webhook', async (req, res) => {
   try {
-    const update = req.body;
-    if (update.message) await handleMessage(update);
-    if (update.callback_query) await handleCallback(update.callback_query);
-    res.sendStatus(200);
+    const u = req.body;
+    console.log('Webhook:', JSON.stringify(u).substring(0, 200));
+    if (u.message) await handleMessage(u);
+    if (u.callback_query) await handleCallback(u.callback_query);
   } catch (err) {
     console.error('Webhook error:', err);
-    res.sendStatus(200);
   }
+  res.sendStatus(200);
 });
 
-// ===== ПРИЁМ ЗАЯВОК С САЙТА =====
+// ===== API: ПРИЕМ ЗАЯВОК С САЙТА =====
 app.post('/api/submit', async (req, res) => {
   try {
     const { type, data } = req.body;
     const id = ++approvalCounter;
 
-    if (type === 'hotel') {
-      pendingApprovals.set(id, { type: 'hotel', data, timestamp: new Date().toISOString() });
+    const labels = {
+      hotel: '🏨 ЗАЯВКА ОТЕЛЯ',
+      post: '📝 НОВЫЙ ПОСТ',
+      callback: '📞 ОБРАТНЫЙ ЗВОНОК',
+      request: '📋 НОВЫЙ ЗАПРОС',
+      buyer: '👤 РЕГИСТРАЦИЯ ПОКУПАТЕЛЯ'
+    };
 
-      let text = `🏨 *НОВАЯ ЗАЯВКА ОТЕЛЯ — ЖДЁТ ОДОБРЕНИЯ*\n🆔 #${id}\n\n`;
-      for (const [key, value] of Object.entries(data)) {
-        if (value) text += `*${key}:* ${value}\n`;
-      }
-      text += `\n🕐 ${new Date().toLocaleString('ru-RU')}`;
+    pendingApprovals.set(id, { type, data, timestamp: ts() });
 
-      const keyboard = {
-        inline_keyboard: [
-          [
-            { text: '✅ Одобрить', callback_data: `approve_hotel_${id}` },
-            { text: '❌ Отклонить', callback_data: `reject_hotel_${id}` }
-          ],
-          [{ text: '📞 Позвонить', callback_data: `call_hotel_${id}` }]
+    let text = `${labels[type] || '📩 НОВАЯ ЗАЯВКА'} — ЖДЕТ ОДОБРЕНИЯ\n`;
+    text += `ID: #${id}\n\n`;
+    text += fmtData(data);
+    text += `\nВремя: ${ts()}`;
+
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '✅ Принять', callback_data: `approve_${type}_${id}` },
+          { text: '❌ Отклонить', callback_data: `reject_${type}_${id}` }
         ]
-      };
-      await sendMessageWithKeyboard(TG_CHAT, text, keyboard);
-      res.json({ success: true, message: 'Заявка отправлена на рассмотрение' });
+      ]
+    };
 
-    } else if (type === 'post') {
-      pendingApprovals.set(id, { type: 'post', data, timestamp: new Date().toISOString() });
-
-      let text = `📝 *НОВЫЙ ПОСТ — ЖДЁТ МОДЕРАЦИИ*\n🆔 #${id}\n\n`;
-      for (const [key, value] of Object.entries(data)) {
-        if (value) text += `*${key}:* ${value}\n`;
-      }
-      text += `\n🕐 ${new Date().toLocaleString('ru-RU')}`;
-
-      const keyboard = {
-        inline_keyboard: [
-          [
-            { text: '✅ Опубликовать', callback_data: `approve_post_${id}` },
-            { text: '❌ Отклонить', callback_data: `reject_post_${id}` }
-          ],
-          [{ text: '✏️ Запросить правки', callback_data: `edit_post_${id}` }]
-        ]
-      };
-      await sendMessageWithKeyboard(TG_CHAT, text, keyboard);
-      res.json({ success: true, message: 'Пост отправлен на модерацию' });
-
-    } else {
-      // ВСЕ типы заявок с кнопками одобрения
-      const labels = { callback: '📞 Обратный звонок', request: '📋 Новый запрос', buyer: '👤 Регистрация покупателя' };
-      pendingApprovals.set(id, { type, data, timestamp: new Date().toISOString() });
-
-      let text = `${labels[type] || '📩 Новая заявка'} — ЖДЁТ ОДОБРЕНИЯ\n🆔 #${id}\n\n`;
-      for (const [key, value] of Object.entries(data)) {
-        if (value) text += `${key}: ${value}\n`;
-      }
-      text += `\n🕐 ${new Date().toLocaleString('ru-RU')}`;
-
-      const keyboard = {
-        inline_keyboard: [
-          [
-            { text: '✅ Принять', callback_data: `approve_${type}_${id}` },
-            { text: '❌ Отклонить', callback_data: `reject_${type}_${id}` }
-          ]
-        ]
-      };
-      await sendMessageWithKeyboard(TG_CHAT, text, keyboard);
-      res.json({ success: true, message: 'Заявка отправлена на рассмотрение' });
-    }
+    await sendWithKeyboard(TG_CHAT, text, keyboard);
+    res.json({ success: true, id });
   } catch (err) {
     console.error('Submit error:', err);
     res.status(500).json({ error: err.message });
@@ -151,7 +117,7 @@ app.post('/api/submit', async (req, res) => {
 // ===== ОБРАБОТКА СООБЩЕНИЙ =====
 async function handleMessage(update) {
   const msg = update.message;
-  if (!msg.text) return;
+  if (!msg || !msg.text) return;
 
   const chatId = msg.chat.id;
   const text = msg.text.trim();
@@ -159,66 +125,28 @@ async function handleMessage(update) {
   const username = msg.from.username || '';
   const userId = msg.from.id;
 
-  // Антиспам
   if (isRateLimited(chatId)) {
-    await sendMessage(chatId, '⛔ Слишком много сообщений. Подождите минуту.');
+    await send(chatId, '⛔ Слишком много сообщений. Подождите минуту.');
     return;
   }
 
-  // ===== ПУБЛИЧНЫЕ КОМАНДЫ =====
-
+  // /start
   if (text === '/start') {
-    const keyboard = {
+    await sendWithKeyboard(chatId, `🌿 Привет, ${name}!\n\nДобро пожаловать в EcoLoop — маркетплейс для перераспределения излишков отелей Казахстана.\n\nВыбери что интересует:`, {
       inline_keyboard: [
-        [
-          { text: '🛍️ Лоты', callback_data: 'lots' },
-          { text: '📊 Статистика', callback_data: 'stats' }
-        ],
-        [
-          { text: '📝 Оставить заявку', callback_data: 'request' },
-          { text: '💰 Цены', callback_data: 'prices' }
-        ],
-        [
-          { text: '🏨 Для отелей', callback_data: 'forhotels' },
-          { text: '📞 Контакты', callback_data: 'contacts' }
-        ],
-        [
-          { text: '🌿 О проекте', callback_data: 'about' },
-          { text: '❓ FAQ', callback_data: 'faq' }
-        ],
-        [
-          { text: '🌐 Открыть сайт', url: 'https://ecoloop.pages.dev' }
-        ]
+        [{ text: '🛍️ Лоты', callback_data: 'lots' }, { text: '📊 Статистика', callback_data: 'stats' }],
+        [{ text: '📝 Оставить заявку', callback_data: 'request' }, { text: '💰 Цены', callback_data: 'prices' }],
+        [{ text: '🏨 Для отелей', callback_data: 'forhotels' }, { text: '📞 Контакты', callback_data: 'contacts' }],
+        [{ text: '🌿 О проекте', callback_data: 'about' }, { text: '❓ FAQ', callback_data: 'faq' }],
+        [{ text: '🌐 Открыть сайт', url: 'https://ecoloop.pages.dev' }]
       ]
-    };
-    await sendMessageWithKeyboard(chatId, `🌿 *Привет, ${name}!*
-
-Добро пожаловать в *EcoLoop* — маркетплейс для перераспределения излишков отелей Казахстана.
-
-Выбери что интересует:`, keyboard);
+    });
     return;
   }
 
+  // /help
   if (text === '/help') {
-    const msg = `📋 *Команды EcoLoop Bot:*
-
-👤 *Для всех:*
-/start — Главное меню с кнопками
-/lots — Активные лоты со скидками
-/stats — Статистика платформы
-/request — Оставить заявку
-/contacts — Связаться с менеджером
-/about — О проекте EcoLoop
-/prices — Как формируются цены
-/forhotels — Информация для отелей
-/faq — Частые вопросы
-/feedback — Оставить отзыв
-
-📝 Написать: _Заявка: [что ищете]_
-⭐ Отзыв: _Отзыв: [ваш текст]_
-
-🔗 Сайт: ecoloop.pages.dev`;
-    await sendMessage(chatId, msg);
+    await send(chatId, `📋 Команды EcoLoop Bot:\n\n/start — Главное меню\n/lots — Активные лоты\n/stats — Статистика\n/request — Оставить заявку\n/contacts — Контакты\n/about — О проекте\n/prices — Цены\n/forhotels — Для отелей\n/faq — FAQ\n/feedback — Отзыв\n\nНаписать: Заявка: [что ищете]\nОтзыв: Отзыв: [текст]\n\nСайт: ecoloop.pages.dev`);
     return;
   }
 
@@ -232,322 +160,177 @@ async function handleMessage(update) {
   if (text === '/faq') { await sendFAQ(chatId); return; }
   if (text === '/feedback') { await sendFeedbackPrompt(chatId); return; }
 
-  // ===== АДМИН-КОМАНДЫ (ЗАЩИЩЕНЫ) =====
-
+  // /admin
   if (text === '/admin') {
-    if (!isAdmin(chatId)) {
-      await sendMessage(chatId, '🔒 У вас нет доступа к админ-панели.');
-      return;
-    }
-    const pendingCount = pendingApprovals.size;
-    const keyboard = {
+    if (!isAdmin(chatId)) { await send(chatId, '🔒 Нет доступа.'); return; }
+    const cnt = pendingApprovals.size;
+    await sendWithKeyboard(chatId, `🔐 Админ-панель EcoLoop\n\nПривет, ${name}!\nОжидают одобрения: ${cnt}\n\nВыбери действие:`, {
       inline_keyboard: [
-        [
-          { text: `📋 Ожидают (${pendingCount})`, callback_data: 'admin_pending' },
-          { text: `📊 Статистика`, callback_data: 'admin_stats' }
-        ],
-        [
-          { text: '📢 Рассылка', callback_data: 'admin_broadcast' },
-          { text: '⚙️ Настройки', callback_data: 'admin_settings' }
-        ]
+        [{ text: `📋 Ожидают (${cnt})`, callback_data: 'admin_pending' }, { text: '📊 Статистика', callback_data: 'admin_stats' }],
+        [{ text: '📢 Рассылка', callback_data: 'admin_broadcast' }, { text: '⚙️ Настройки', callback_data: 'admin_settings' }]
       ]
-    };
-    await sendMessageWithKeyboard(chatId, `🔐 *Админ-панель EcoLoop*\n\n👋 Привет, ${name}!\n📋 Ожидают одобрения: *${pendingCount}*\n\nВыбери действие:`, keyboard);
+    });
     return;
   }
 
   if (text === '/users') {
-    if (!isAdmin(chatId)) {
-      await sendMessage(chatId, '🔒 Нет доступа.');
-      return;
-    }
-    await sendMessage(chatId, `👥 *Пользователи:*\n\nСтатистика пользователей доступна в Firebase Console.\n🔗 https://console.firebase.google.com`);
+    if (!isAdmin(chatId)) { await send(chatId, '🔒 Нет доступа.'); return; }
+    await send(chatId, '👥 Статистика пользователей доступна в Firebase Console.\nhttps://console.firebase.google.com');
     return;
   }
 
-  // Рассылка: /broadcast Текст сообщения
   if (text.startsWith('/broadcast ')) {
-    if (!isAdmin(chatId)) {
-      await sendMessage(chatId, '🔒 Нет доступа.');
-      return;
-    }
-    const broadcastText = text.replace('/broadcast ', '');
-    await sendMessage(chatId, `📢 *Рассылка отправлена:*\n\n${broadcastText}\n\n_Для реальной рассылки подключите базу пользователей._`);
+    if (!isAdmin(chatId)) { await send(chatId, '🔒 Нет доступа.'); return; }
+    const msg = text.replace('/broadcast ', '');
+    await send(chatId, `📢 Рассылка отправлена:\n\n${msg}\n\nДля реальной рассылки подключите базу пользователей.`);
     return;
   }
 
-  // ===== ОБРАБОТКА ТЕКСТА =====
-
-  // Заявка
+  // Заявка из чата
   if (text.toLowerCase().startsWith('заявка:')) {
     const id = ++approvalCounter;
-    pendingApprovals.set(id, { type: 'request', data: { text, name, username, userId }, userChatId: chatId, timestamp: new Date().toISOString() });
-
-    const adminText = `📋 *Новая заявка из Telegram!*\n🆔 #${id}\n\n👤 *От:* ${name} ${username ? '(@' + username + ')' : ''}\n🆔 *ID:* ${userId}\n\n${text}\n\n🕐 ${new Date().toLocaleString('ru-RU')}`;
-    const keyboard = {
-      inline_keyboard: [
-        [
-          { text: '✅ Взять в работу', callback_data: `approve_request_${id}` },
-          { text: '❌ Отклонить', callback_data: `reject_request_${id}` }
-        ]
-      ]
-    };
-    await sendMessageWithKeyboard(TG_CHAT, adminText, keyboard);
-    await sendMessage(chatId, `✅ *Заявка #${id} принята!*\n\nВаш запрос передан менеджеру. Мы свяжемся с вами в течение 2 часов.\n\n📞 Срочный вопрос: +7 (776) 075-24-63`);
+    pendingApprovals.set(id, { type: 'request', data: { text, name, username, userId }, userChatId: chatId, timestamp: ts() });
+    await sendWithKeyboard(TG_CHAT, `📋 ЗАЯВКА ИЗ TELEGRAM — ЖДЕТ ОДОБРЕНИЯ\nID: #${id}\n\nОт: ${name} ${username ? '(@' + username + ')' : ''}\nTG ID: ${userId}\n\n${text}\n\nВремя: ${ts()}`, {
+      inline_keyboard: [[
+        { text: '✅ Взять в работу', callback_data: `approve_request_${id}` },
+        { text: '❌ Отклонить', callback_data: `reject_request_${id}` }
+      ]]
+    });
+    await send(chatId, `✅ Заявка #${id} принята!\n\nВаш запрос передан менеджеру. Мы свяжемся с вами в течение 2 часов.\n\n📞 Срочно: +7 (776) 075-24-63`);
     return;
   }
 
   // Отзыв
   if (text.toLowerCase().startsWith('отзыв:')) {
-    const adminText = `⭐ *Новый отзыв из Telegram!*\n\n👤 *От:* ${name} ${username ? '(@' + username + ')' : ''}\n\n${text}\n\n🕐 ${new Date().toLocaleString('ru-RU')}`;
-    await sendMessage(TG_CHAT, adminText);
-    await sendMessage(chatId, `🙏 *Спасибо за отзыв!*\n\nМы ценим ваше мнение и используем его для улучшения сервиса.`);
+    await send(TG_CHAT, `⭐ ОТЗЫВ из Telegram\n\nОт: ${name} ${username ? '(@' + username + ')' : ''}\n\n${text}\n\nВремя: ${ts()}`);
+    await send(chatId, '🙏 Спасибо за отзыв! Мы ценим ваше мнение.');
     return;
   }
 
   // Жалоба
   if (text.toLowerCase().startsWith('жалоба:')) {
     const id = ++approvalCounter;
-    pendingApprovals.set(id, { type: 'complaint', data: { text, name, username, userId }, userChatId: chatId, timestamp: new Date().toISOString() });
-
-    const adminText = `🚨 *ЖАЛОБА из Telegram!*\n🆔 #${id}\n\n👤 *От:* ${name} ${username ? '(@' + username + ')' : ''}\n🆔 *ID:* ${userId}\n\n${text}\n\n🕐 ${new Date().toLocaleString('ru-RU')}`;
-    const keyboard = {
-      inline_keyboard: [
-        [
-          { text: '✅ Рассмотрена', callback_data: `approve_complaint_${id}` },
-          { text: '📞 Связаться', callback_data: `call_complaint_${id}` }
-        ]
-      ]
-    };
-    await sendMessageWithKeyboard(TG_CHAT, adminText, keyboard);
-    await sendMessage(chatId, `📨 *Жалоба #${id} принята.*\n\nМы рассмотрим её в приоритетном порядке и свяжемся с вами.\n\n📞 Горячая линия: +7 (776) 075-24-63`);
+    pendingApprovals.set(id, { type: 'complaint', data: { text, name, username, userId }, userChatId: chatId, timestamp: ts() });
+    await sendWithKeyboard(TG_CHAT, `🚨 ЖАЛОБА из Telegram\nID: #${id}\n\nОт: ${name} ${username ? '(@' + username + ')' : ''}\nTG ID: ${userId}\n\n${text}\n\nВремя: ${ts()}`, {
+      inline_keyboard: [[
+        { text: '✅ Рассмотрена', callback_data: `approve_complaint_${id}` },
+        { text: '📞 Связаться', callback_data: `call_complaint_${id}` }
+      ]]
+    });
+    await send(chatId, `📨 Жалоба #${id} принята.\nМы рассмотрим её в приоритетном порядке.\n\n📞 Горячая линия: +7 (776) 075-24-63`);
     return;
   }
 
-  // Телефонный номер — автозаявка
-  if (/^\+?[78]\s?\d{3}\s?\d{3}\s?\d{2}\s?\d{2}$/.test(text.replace(/[\s\-()]/g, ''))) {
-    const adminText = `📞 *Номер телефона из Telegram!*
-
-👤 ${name} ${username ? '(@' + username + ')' : ''}
-📱 ${text}
-
-🕐 ${new Date().toLocaleString('ru-RU')}`;
-    await sendMessage(TG_CHAT, adminText);
-    await sendMessage(chatId, `✅ Номер получен! Менеджер перезвонит в течение часа.`);
+  // Телефон
+  if (/^\+?[78]\d{10}$/.test(text.replace(/[\s\-()]/g, ''))) {
+    await send(TG_CHAT, `📞 Номер телефона из Telegram\n\n${name} ${username ? '(@' + username + ')' : ''}\n📱 ${text}\n\nВремя: ${ts()}`);
+    await send(chatId, '✅ Номер получен! Менеджер перезвонит в течение часа.');
     return;
   }
 
-  // Неизвестное сообщение
-  const keyboard = {
+  // Неизвестное
+  await sendWithKeyboard(chatId, '🤔 Не понял сообщение.\n\nПопробуйте:\n- Заявка: [что ищете]\n- Отзыв: [ваш текст]\n- Отправить номер телефона\n- Или выбрать кнопку:', {
     inline_keyboard: [
-      [
-        { text: '🛍️ Лоты', callback_data: 'lots' },
-        { text: '📝 Заявка', callback_data: 'request' }
-      ],
-      [
-        { text: '📋 Меню', callback_data: 'menu' },
-        { text: '❓ FAQ', callback_data: 'faq' }
-      ]
+      [{ text: '🛍️ Лоты', callback_data: 'lots' }, { text: '📝 Заявка', callback_data: 'request' }],
+      [{ text: '📋 Меню', callback_data: 'menu' }, { text: '❓ FAQ', callback_data: 'faq' }]
     ]
-  };
-  await sendMessageWithKeyboard(chatId, `🤔 Не понял сообщение.
-
-Попробуйте:
-• Написать _Заявка: [что ищете]_
-• Написать _Отзыв: [ваш текст]_
-• Отправить номер телефона
-• Или выбрать кнопку:`, keyboard);
+  });
 }
 
-// ===== INLINE КНОПКИ =====
+// ===== CALLBACK QUERY =====
 async function handleCallback(query) {
   const chatId = query.message.chat.id;
   const data = query.callback_data;
   const msgId = query.message.message_id;
 
-  await fetch(`${TG_API}/answerCallbackQuery`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ callback_query_id: query.id })
-  });
-
-  // ===== ОДОБРЕНИЕ ОТЕЛЯ =====
-  if (data.startsWith('approve_hotel_')) {
-    if (!isAdmin(chatId)) { await sendMessage(chatId, '🔒'); return; }
-    const id = parseInt(data.replace('approve_hotel_', ''));
-    const item = pendingApprovals.get(id);
-    if (!item) { await sendMessage(chatId, '⚠️ Заявка не найдена или уже обработана.'); return; }
-    pendingApprovals.delete(id);
-    await editMessage(chatId, msgId, `✅ *ОТЕЛЬ ОДОБРЕН* 🆔 #${id}\n\n${formatData(item.data)}\n\n✅ Одобрено: ${new Date().toLocaleString('ru-RU')}\n👤 Админ: ${query.from.first_name}`);
-    await sendMessage(chatId, `📧 Отправьте подтверждение отелю:\n${item.data.email || item.data.phone || 'Контакт не указан'}`);
-    return;
-  }
-  if (data.startsWith('reject_hotel_')) {
-    if (!isAdmin(chatId)) { await sendMessage(chatId, '🔒'); return; }
-    const id = parseInt(data.replace('reject_hotel_', ''));
-    const item = pendingApprovals.get(id);
-    if (!item) { await sendMessage(chatId, '⚠️ Заявка не найдена или уже обработана.'); return; }
-    pendingApprovals.delete(id);
-    await editMessage(chatId, msgId, `❌ *ОТЕЛЬ ОТКЛОНЁН* 🆔 #${id}\n\n${formatData(item.data)}\n\n❌ Отклонено: ${new Date().toLocaleString('ru-RU')}\n👤 Админ: ${query.from.first_name}`);
-    return;
-  }
-  if (data.startsWith('call_hotel_')) {
-    if (!isAdmin(chatId)) { await sendMessage(chatId, '🔒'); return; }
-    const id = parseInt(data.replace('call_hotel_', ''));
-    const item = pendingApprovals.get(id);
-    if (!item) { await sendMessage(chatId, '⚠️ Заявка не найдена.'); return; }
-    await sendMessage(chatId, `📞 Контакт отеля #${id}:\n${item.data.phone || item.data.email || 'Контакт не указан'}`);
-    return;
+  // Обязательно ответить на callback
+  try {
+    await fetch(`${TG_API}/answerCallbackQuery`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ callback_query_id: query.id })
+    });
+  } catch (e) {
+    console.error('answerCallback error:', e);
   }
 
-  // ===== ОДОБРЕНИЕ ПОСТА =====
-  if (data.startsWith('approve_post_')) {
-    if (!isAdmin(chatId)) { await sendMessage(chatId, '🔒'); return; }
-    const id = parseInt(data.replace('approve_post_', ''));
-    const item = pendingApprovals.get(id);
-    if (!item) { await sendMessage(chatId, '⚠️ Пост не найден или уже обработан.'); return; }
-    pendingApprovals.delete(id);
-    await editMessage(chatId, msgId, `✅ *ПОСТ ОПУБЛИКОВАН* 🆔 #${id}\n\n${formatData(item.data)}\n\n✅ Опубликовано: ${new Date().toLocaleString('ru-RU')}\n👤 Админ: ${query.from.first_name}`);
-    if (item.userChatId) await sendMessage(item.userChatId, `✅ *Ваш пост #${id} одобрен и опубликован!*`);
-    return;
-  }
-  if (data.startsWith('reject_post_')) {
-    if (!isAdmin(chatId)) { await sendMessage(chatId, '🔒'); return; }
-    const id = parseInt(data.replace('reject_post_', ''));
-    const item = pendingApprovals.get(id);
-    if (!item) { await sendMessage(chatId, '⚠️ Пост не найден или уже обработан.'); return; }
-    pendingApprovals.delete(id);
-    await editMessage(chatId, msgId, `❌ *ПОСТ ОТКЛОНЁН* 🆔 #${id}\n\n${formatData(item.data)}\n\n❌ Отклонено: ${new Date().toLocaleString('ru-RU')}`);
-    if (item.userChatId) await sendMessage(item.userChatId, `❌ *Ваш пост #${id} отклонён.* Попробуйте изменить и отправить заново.`);
-    return;
-  }
-  if (data.startsWith('edit_post_')) {
-    if (!isAdmin(chatId)) { await sendMessage(chatId, '🔒'); return; }
-    const id = parseInt(data.replace('edit_post_', ''));
-    const item = pendingApprovals.get(id);
-    if (!item) { await sendMessage(chatId, '⚠️ Пост не найден.'); return; }
-    if (item.userChatId) await sendMessage(item.userChatId, `✏️ *Пост #${id} требует правок.* Отредактируйте и отправьте заново.`);
-    await sendMessage(chatId, `✏️ Пользователь уведомлён о необходимости правок для поста #${id}`);
-    return;
-  }
+  console.log('Callback:', data, 'from:', chatId);
 
-  // ===== ОДОБРЕНИЕ ЗАЯВКИ =====
-  if (data.startsWith('approve_request_')) {
-    if (!isAdmin(chatId)) { await sendMessage(chatId, '🔒'); return; }
-    const id = parseInt(data.replace('approve_request_', ''));
-    const item = pendingApprovals.get(id);
-    if (!item) { await sendMessage(chatId, '⚠️ Заявка не найдена.'); return; }
-    pendingApprovals.delete(id);
-    await editMessage(chatId, msgId, `✅ *ЗАЯВКА В РАБОТЕ* 🆔 #${id}\n\n${formatData(item.data)}\n\n✅ Взято: ${new Date().toLocaleString('ru-RU')}\n👤 Менеджер: ${query.from.first_name}`);
-    if (item.userChatId) await sendMessage(item.userChatId, `✅ *Заявка #${id} принята в работу!* Менеджер скоро свяжется с вами. 📞`);
-    return;
-  }
-  if (data.startsWith('reject_request_')) {
-    if (!isAdmin(chatId)) { await sendMessage(chatId, '🔒'); return; }
-    const id = parseInt(data.replace('reject_request_', ''));
-    const item = pendingApprovals.get(id);
-    if (!item) { await sendMessage(chatId, '⚠️ Заявка не найдена.'); return; }
-    pendingApprovals.delete(id);
-    await editMessage(chatId, msgId, `❌ *ЗАЯВКА ОТКЛОНЕНА* 🆔 #${id}\n\n${formatData(item.data)}\n\n❌ Отклонено: ${new Date().toLocaleString('ru-RU')}`);
-    if (item.userChatId) await sendMessage(item.userChatId, `❌ *Заявка #${id} отклонена.* Свяжитесь: +7 (776) 075-24-63`);
-    return;
-  }
+  // === УНИВЕРСАЛЬНЫЙ ОБРАБОТЧИК ОДОБРЕНИЯ ===
+  if (data.startsWith('approve_') || data.startsWith('reject_') || data.startsWith('call_') || data.startsWith('edit_')) {
+    if (!isAdmin(chatId)) { await send(chatId, '🔒 Нет доступа.'); return; }
 
-  // ===== ОБРАТНЫЙ ЗВОНОК =====
-  if (data.startsWith('approve_callback_')) {
-    if (!isAdmin(chatId)) { await sendMessage(chatId, '🔒'); return; }
-    const id = parseInt(data.replace('approve_callback_', ''));
-    const item = pendingApprovals.get(id);
-    if (!item) { await sendMessage(chatId, '⚠️ Заявка не найдена.'); return; }
-    pendingApprovals.delete(id);
-    await editMessage(chatId, msgId, `✅ ЗВОНОК ПРИНЯТ 🆔 #${id}\n\n${formatData(item.data)}\n\n✅ Принято: ${new Date().toLocaleString('ru-RU')}\n👤 Менеджер: ${query.from.first_name}`);
-    await sendMessage(chatId, `📞 Позвоните клиенту:\n${item.data.phone || item.data.email || 'Контакт не указан'}`);
-    return;
-  }
-  if (data.startsWith('reject_callback_')) {
-    if (!isAdmin(chatId)) { await sendMessage(chatId, '🔒'); return; }
-    const id = parseInt(data.replace('reject_callback_', ''));
-    const item = pendingApprovals.get(id);
-    if (!item) { await sendMessage(chatId, '⚠️ Заявка не найдена.'); return; }
-    pendingApprovals.delete(id);
-    await editMessage(chatId, msgId, `❌ ЗВОНОК ОТКЛОНЁН 🆔 #${id}\n\n${formatData(item.data)}\n\n❌ Отклонено: ${new Date().toLocaleString('ru-RU')}`);
-    return;
-  }
+    const parts = data.split('_');
+    const action = parts[0]; // approve, reject, call, edit
+    const type = parts[1];   // hotel, post, request, complaint, callback, buyer
+    const id = parseInt(parts[2]);
 
-  // ===== РЕГИСТРАЦИЯ ПОКУПАТЕЛЯ =====
-  if (data.startsWith('approve_buyer_')) {
-    if (!isAdmin(chatId)) { await sendMessage(chatId, '🔒'); return; }
-    const id = parseInt(data.replace('approve_buyer_', ''));
     const item = pendingApprovals.get(id);
-    if (!item) { await sendMessage(chatId, '⚠️ Заявка не найдена.'); return; }
-    pendingApprovals.delete(id);
-    await editMessage(chatId, msgId, `✅ ПОКУПАТЕЛЬ ОДОБРЕН 🆔 #${id}\n\n${formatData(item.data)}\n\n✅ Одобрено: ${new Date().toLocaleString('ru-RU')}\n👤 Админ: ${query.from.first_name}`);
-    if (item.userChatId) await sendMessage(item.userChatId, `✅ Ваша регистрация одобрена! Добро пожаловать в EcoLoop.`);
-    return;
-  }
-  if (data.startsWith('reject_buyer_')) {
-    if (!isAdmin(chatId)) { await sendMessage(chatId, '🔒'); return; }
-    const id = parseInt(data.replace('reject_buyer_', ''));
-    const item = pendingApprovals.get(id);
-    if (!item) { await sendMessage(chatId, '⚠️ Заявка не найдена.'); return; }
-    pendingApprovals.delete(id);
-    await editMessage(chatId, msgId, `❌ ПОКУПАТЕЛЬ ОТКЛОНЁН 🆔 #${id}\n\n${formatData(item.data)}\n\n❌ Отклонено: ${new Date().toLocaleString('ru-RU')}`);
-    if (item.userChatId) await sendMessage(item.userChatId, `❌ Вашу регистрацию отклонили. Свяжитесь: +7 (776) 075-24-63`);
-    return;
-  }
 
-  // ===== ЖАЛОБА =====
-  if (data.startsWith('approve_complaint_')) {
-    if (!isAdmin(chatId)) { await sendMessage(chatId, '🔒'); return; }
-    const id = parseInt(data.replace('approve_complaint_', ''));
-    const item = pendingApprovals.get(id);
-    if (!item) { await sendMessage(chatId, '⚠️ Жалоба не найдена.'); return; }
+    if (action === 'call') {
+      if (!item) { await send(chatId, '⚠️ Заявка не найдена.'); return; }
+      const contact = item.data.phone || item.data.email || item.data.contactName || 'Контакт не указан';
+      await send(chatId, `📞 Контакт #${id}:\n${contact}`);
+      if (item.userChatId) await send(item.userChatId, `📞 Менеджер хочет связаться с вами по заявке #${id}. Ожидайте.`);
+      return;
+    }
+
+    if (action === 'edit') {
+      if (!item) { await send(chatId, '⚠️ Заявка не найдена.'); return; }
+      if (item.userChatId) await send(item.userChatId, `✏️ Заявка #${id} требует правок. Отредактируйте и отправьте заново.`);
+      await send(chatId, `✏️ Пользователь уведомлен о правках для #${id}`);
+      return;
+    }
+
+    if (!item) { await send(chatId, '⚠️ Заявка #' + id + ' не найдена или уже обработана.'); return; }
+
     pendingApprovals.delete(id);
-    await editMessage(chatId, msgId, `✅ *ЖАЛОБА РАССМОТРЕНА* 🆔 #${id}\n\n${formatData(item.data)}\n\n✅ Рассмотрена: ${new Date().toLocaleString('ru-RU')}`);
-    if (item.userChatId) await sendMessage(item.userChatId, `✅ *Жалоба #${id} рассмотрена.* Спасибо за обращение.`);
-    return;
-  }
-  if (data.startsWith('call_complaint_')) {
-    if (!isAdmin(chatId)) { await sendMessage(chatId, '🔒'); return; }
-    const id = parseInt(data.replace('call_complaint_', ''));
-    const item = pendingApprovals.get(id);
-    if (!item) { await sendMessage(chatId, '⚠️ Жалоба не найдена.'); return; }
-    if (item.userChatId) {
-      await sendMessage(item.userChatId, `📞 *Менеджер хочет связаться с вами по жалобе #${id}.* Ожидайте звонок.`);
-      await sendMessage(chatId, `📞 Пользователь уведомлён. Chat ID: ${item.userChatId}`);
+
+    const labels = {
+      hotel: '🏨 ОТЕЛЬ', post: '📝 ПОСТ', request: '📋 ЗАЯВКА',
+      complaint: '🚨 ЖАЛОБА', callback: '📞 ЗВОНОК', buyer: '👤 ПОКУПАТЕЛЬ'
+    };
+    const label = labels[type] || '📩 ЗАЯВКА';
+
+    if (action === 'approve') {
+      await editMsg(chatId, msgId, `✅ ${label} ОДОБРЕНО\nID: #${id}\n\n${fmtData(item.data)}\n✅ Одобрено: ${ts()}\nАдмин: ${query.from.first_name}`);
+      if (item.userChatId) await send(item.userChatId, `✅ Ваша заявка #${id} одобрена!`);
+    } else if (action === 'reject') {
+      await editMsg(chatId, msgId, `❌ ${label} ОТКЛОНЕНО\nID: #${id}\n\n${fmtData(item.data)}\n❌ Отклонено: ${ts()}\nАдмин: ${query.from.first_name}`);
+      if (item.userChatId) await send(item.userChatId, `❌ Ваша заявка #${id} отклонена. Свяжитесь: +7 (776) 075-24-63`);
     }
     return;
   }
 
-  // ===== АДМИН CALLBACK =====
+  // === АДМИН CALLBACKS ===
   if (data === 'admin_pending') {
-    if (!isAdmin(chatId)) { await sendMessage(chatId, '🔒'); return; }
-    if (pendingApprovals.size === 0) { await sendMessage(chatId, '✅ Нет заявок на одобрение!'); return; }
-    let text = `📋 *Ожидают одобрения (${pendingApprovals.size}):*\n\n`;
+    if (!isAdmin(chatId)) { await send(chatId, '🔒'); return; }
+    if (pendingApprovals.size === 0) { await send(chatId, '✅ Нет заявок на одобрение!'); return; }
+    let text = `📋 Ожидают одобрения (${pendingApprovals.size}):\n\n`;
+    const icons = { hotel: '🏨', post: '📝', request: '📋', complaint: '🚨', callback: '📞', buyer: '👤' };
     for (const [id, item] of pendingApprovals) {
-      const icons = { hotel: '🏨', post: '📝', request: '📋', complaint: '🚨', callback: '📞', buyer: '👤' };
       text += `${icons[item.type] || '📩'} #${id} — ${item.type} — ${item.timestamp}\n`;
     }
-    await sendMessage(chatId, text);
+    await send(chatId, text);
     return;
   }
   if (data === 'admin_stats') {
-    if (!isAdmin(chatId)) { await sendMessage(chatId, '🔒'); return; }
-    await sendAdminStats(chatId);
+    if (!isAdmin(chatId)) { await send(chatId, '🔒'); return; }
+    await send(chatId, `📊 Админ-статистика:\n\nБот: v4.0\nАнтиспам: ${RATE_LIMIT_MAX} msg/${RATE_LIMIT_WINDOW/1000}s\nАдминов: ${ADMINS.length}\nОжидают: ${pendingApprovals.size}\nВ кэше: ${rateLimit.size}\n\nОбновлено: ${ts()}`);
     return;
   }
   if (data === 'admin_broadcast') {
-    if (!isAdmin(chatId)) { await sendMessage(chatId, '🔒'); return; }
-    await sendMessage(chatId, '📢 Для рассылки отправьте:\n`/broadcast Текст сообщения`');
+    if (!isAdmin(chatId)) { await send(chatId, '🔒'); return; }
+    await send(chatId, '📢 Для рассылки отправьте:\n/broadcast Текст сообщения');
     return;
   }
   if (data === 'admin_settings') {
-    if (!isAdmin(chatId)) { await sendMessage(chatId, '🔒'); return; }
-    await sendMessage(chatId, `⚙️ *Настройки бота:*\n\n• Версия: 3.0\n• Антиспам: ${RATE_LIMIT_MAX} сообщений / ${RATE_LIMIT_WINDOW/1000}с\n• Админов: ${ADMINS.length}\n• Ожидают: ${pendingApprovals.size}`);
+    if (!isAdmin(chatId)) { await send(chatId, '🔒'); return; }
+    await send(chatId, `⚙️ Настройки бота:\n\nВерсия: 4.0\nАнтиспам: ${RATE_LIMIT_MAX} msg/${RATE_LIMIT_WINDOW/1000}s\nАдминов: ${ADMINS.length}\nОжидают: ${pendingApprovals.size}`);
     return;
   }
 
-  // ===== ОБЫЧНЫЕ CALLBACK =====
+  // === ОБЫЧНЫЕ CALLBACKS ===
   switch (data) {
     case 'menu': await sendMenu(chatId); break;
     case 'lots': await sendLots(chatId); break;
@@ -562,397 +345,156 @@ async function handleCallback(query) {
     case 'lots_food': await sendLotsFood(chatId); break;
     case 'lots_textile': await sendLotsTextile(chatId); break;
     case 'lots_plastic': await sendLotsPlastic(chatId); break;
+    default: console.log('Unknown callback:', data);
   }
 }
 
-// ===== КОНТЕНТ ФУНКЦИИ =====
-
+// ===== КОНТЕНТ =====
 async function sendMenu(chatId) {
-  const keyboard = {
+  await sendWithKeyboard(chatId, '📋 Главное меню:', {
     inline_keyboard: [
-      [
-        { text: '🛍️ Лоты', callback_data: 'lots' },
-        { text: '📊 Статистика', callback_data: 'stats' }
-      ],
-      [
-        { text: '📝 Заявка', callback_data: 'request' },
-        { text: '💰 Цены', callback_data: 'prices' }
-      ],
-      [
-        { text: '🏨 Для отелей', callback_data: 'forhotels' },
-        { text: '📞 Контакты', callback_data: 'contacts' }
-      ],
-      [
-        { text: '🌿 О проекте', callback_data: 'about' },
-        { text: '❓ FAQ', callback_data: 'faq' }
-      ]
+      [{ text: '🛍️ Лоты', callback_data: 'lots' }, { text: '📊 Статистика', callback_data: 'stats' }],
+      [{ text: '📝 Заявка', callback_data: 'request' }, { text: '💰 Цены', callback_data: 'prices' }],
+      [{ text: '🏨 Для отелей', callback_data: 'forhotels' }, { text: '📞 Контакты', callback_data: 'contacts' }],
+      [{ text: '🌿 О проекте', callback_data: 'about' }, { text: '❓ FAQ', callback_data: 'faq' }]
     ]
-  };
-  await sendMessageWithKeyboard(chatId, '📋 *Главное меню:*', keyboard);
+  });
 }
 
 async function sendLots(chatId) {
-  const keyboard = {
+  await sendWithKeyboard(chatId, `🛍️ Активные лоты сегодня:\n\n1. 🍽️ Magic Box от Rixos Almaty\n   500 тг (вместо 1500) — скидка 67%\n   5 кг выпечки. Самовывоз до 21:30\n\n2. ♻️ Пластиковая тара от Hilton\n   200 тг (вместо 600) — скидка 67%\n   50 кг бутылок. Самовывоз до 18:00\n\n3. 👕 Постельное от Marriott\n   150 тг (вместо 450) — скидка 67%\n   20 комплектов. Самовывоз до 20:00\n\nВыбери категорию:`, {
     inline_keyboard: [
-      [
-        { text: '🍽️ Еда', callback_data: 'lots_food' },
-        { text: '👕 Текстиль', callback_data: 'lots_textile' },
-        { text: '♻️ Пластик', callback_data: 'lots_plastic' }
-      ],
+      [{ text: '🍽️ Еда', callback_data: 'lots_food' }, { text: '👕 Текстиль', callback_data: 'lots_textile' }, { text: '♻️ Пластик', callback_data: 'lots_plastic' }],
       [{ text: '◀️ Назад', callback_data: 'menu' }]
     ]
-  };
-  await sendMessageWithKeyboard(chatId, `🛍️ *Активные лоты сегодня:*
-
-1️⃣ 🍽️ *Magic Box от Rixos Almaty*
-   💰 ₸500 (вместо ₸1,500) — *скидка 67%*
-   📦 5 кг выпечки и кондитерских
-   📍 Центральный район
-   ⏰ Самовывоз до 21:30
-
-2️⃣ ♻️ *Пластиковая тара от Hilton*
-   💰 ₸200 (вместо ₸600) — *скидка 67%*
-   📦 50 кг чистых бутылок
-   📍 Медеуский район
-   ⏰ Самовывоз до 18:00
-
-3️⃣ 👕 *Постельное бельё от Marriott*
-   💰 ₸150 (вместо ₸450) — *скидка 67%*
-   📦 20 комплектов
-   📍 Алмалинский район
-   ⏰ Самовывоз до 20:00
-
-Выбери категорию:`, keyboard);
+  });
 }
 
 async function sendLotsFood(chatId) {
-  const keyboard = {
-    inline_keyboard: [
-      [{ text: '📝 Оставить заявку', callback_data: 'request' }],
-      [{ text: '◀️ Все лоты', callback_data: 'lots' }]
-    ]
-  };
-  await sendMessageWithKeyboard(chatId, `🍽️ *Еда — активные лоты:*
-
-1️⃣ *Magic Box от Rixos Almaty*
-   💰 ₸500 • 5 кг выпечки
-   ⏰ до 21:30 • 📍 Центральный
-
-2️⃣ *Бизнес-ланч от Hilton Astana*
-   💰 ₸700 • 3 порции
-   ⏰ до 15:00 • 📍 Есильский
-
-3️⃣ *Молочная продукция от Holiday Inn*
-   💰 ₸400 • 2 кг
-   ⏰ до 19:00 • 📍 Бостандыкский
-
-_Все товары прошли контроль качества_`, keyboard);
+  await sendWithKeyboard(chatId, '🍽️ Еда — активные лоты:\n\n1. Magic Box от Rixos Almaty\n   500 тг — 5 кг выпечки — до 21:30\n\n2. Бизнес-ланч от Hilton Astana\n   700 тг — 3 порции — до 15:00\n\n3. Молочка от Holiday Inn\n   400 тг — 2 кг — до 19:00\n\nВсе товары прошли контроль качества', {
+    inline_keyboard: [[{ text: '📝 Оставить заявку', callback_data: 'request' }], [{ text: '◀️ Все лоты', callback_data: 'lots' }]]
+  });
 }
 
 async function sendLotsTextile(chatId) {
-  const keyboard = {
-    inline_keyboard: [
-      [{ text: '📝 Оставить заявку', callback_data: 'request' }],
-      [{ text: '◀️ Все лоты', callback_data: 'lots' }]
-    ]
-  };
-  await sendMessageWithKeyboard(chatId, `👕 *Текстиль — активные лоты:*
-
-1️⃣ *Постельное бельё от Marriott*
-   💰 ₸150 • 20 комплектов
-   📍 Алмалинский • Состояние: хорошее
-
-2️⃣ *Полотенца от Rixos*
-   💰 ₸100 • 50 шт
-   📍 Центральный • Хлопок 100%
-
-3️⃣ *Униформа от Hilton*
-   💰 ₸200 • 15 комплектов
-   📍 Медеуский • S-XL размеры`, keyboard);
+  await sendWithKeyboard(chatId, '👕 Текстиль — активные лоты:\n\n1. Постельное от Marriott — 150 тг — 20 шт\n2. Полотенца от Rixos — 100 тг — 50 шт\n3. Униформа от Hilton — 200 тг — 15 шт', {
+    inline_keyboard: [[{ text: '📝 Оставить заявку', callback_data: 'request' }], [{ text: '◀️ Все лоты', callback_data: 'lots' }]]
+  });
 }
 
 async function sendLotsPlastic(chatId) {
-  const keyboard = {
-    inline_keyboard: [
-      [{ text: '📝 Оставить заявку', callback_data: 'request' }],
-      [{ text: '◀️ Все лоты', callback_data: 'lots' }]
-    ]
-  };
-  await sendMessageWithKeyboard(chatId, `♻️ *Пластик и вторсырьё:*
-
-1️⃣ *Пластиковая тара от Hilton*
-   💰 ₸200 • 50 кг
-   📍 Медеуский • Чистые, отсортированы
-
-2️⃣ *Картон и упаковка от Rixos*
-   💰 ₸80 • 30 кг
-   📍 Центральный • Спрессованы
-
-3️⃣ *Стеклянные бутылки от Marriott*
-   💰 ₸120 • 100 шт
-   📍 Алмалинский • Целые, промытые`, keyboard);
+  await sendWithKeyboard(chatId, '♻️ Пластик и вторсырье:\n\n1. Пластик от Hilton — 200 тг — 50 кг\n2. Картон от Rixos — 80 тг — 30 кг\n3. Стекло от Marriott — 120 тг — 100 шт', {
+    inline_keyboard: [[{ text: '📝 Оставить заявку', callback_data: 'request' }], [{ text: '◀️ Все лоты', callback_data: 'lots' }]]
+  });
 }
 
 async function sendStats(chatId) {
-  const keyboard = {
-    inline_keyboard: [
-      [{ text: '◀️ Назад', callback_data: 'menu' }]
-    ]
-  };
-  await sendMessageWithKeyboard(chatId, `📊 *Статистика EcoLoop:*
-
-💰 Общий оборот: *₸532,000*
-🏨 Подключено отелей: *10+*
-🛍️ Продано лотов: *47*
-♻️ Сокращено отходов: *1,250 кг*
-👥 Активных покупателей: *120+*
-⭐ Средний рейтинг: *4.8/5*
-
-📈 Рост за неделю: *+18%*
-📅 ${new Date().toLocaleDateString('ru-RU')}`, keyboard);
+  await sendWithKeyboard(chatId, `📊 Статистика EcoLoop:\n\nОборот: 532,000 тг\nОтелей: 10+\nЛотов продано: 47\nСокращено отходов: 1,250 кг\nПокупателей: 120+\nРейтинг: 4.8/5\nРост за неделю: +18%\n\n${new Date().toLocaleDateString('ru-RU')}`, {
+    inline_keyboard: [[{ text: '◀️ Назад', callback_data: 'menu' }]]
+  });
 }
 
 async function sendRequest(chatId) {
-  const keyboard = {
-    inline_keyboard: [
-      [{ text: '🌐 Оформить на сайте', url: 'https://ecoloop.pages.dev' }],
-      [{ text: '◀️ Назад', callback_data: 'menu' }]
-    ]
-  };
-  await sendMessageWithKeyboard(chatId, `📝 *Оставить заявку:*
-
-Напиши в формате:
-
-\`Заявка: Выпечка и хлеб
-Объём: 10 кг
-Район: Бостандыкский
-Телефон: +7 777 123 4567\`
-
-Или просто отправь *номер телефона* — мы перезвоним!`, keyboard);
+  await sendWithKeyboard(chatId, '📝 Оставить заявку:\n\nНапиши в формате:\nЗаявка: Выпечка и хлеб\nОбъем: 10 кг\nРайон: Бостандыкский\nТелефон: +7 777 123 4567\n\nИли просто отправь номер телефона — мы перезвоним!', {
+    inline_keyboard: [[{ text: '🌐 Оформить на сайте', url: 'https://ecoloop.pages.dev' }], [{ text: '◀️ Назад', callback_data: 'menu' }]]
+  });
 }
 
 async function sendContacts(chatId) {
-  const keyboard = {
+  await sendWithKeyboard(chatId, '📞 Контакты EcoLoop:\n\nМенеджер:\n📱 +7 (776) 075-24-63\n📧 info@ecoloop.kz\n\nВремя работы:\nПн-Пт: 9:00-18:00\nСб: 10:00-15:00\n\nАлматы, Казахстан', {
     inline_keyboard: [
       [{ text: '💬 Написать менеджеру', url: 'https://t.me/ecoloop_manager' }],
       [{ text: '🌐 Сайт', url: 'https://ecoloop.pages.dev' }],
       [{ text: '◀️ Назад', callback_data: 'menu' }]
     ]
-  };
-  await sendMessageWithKeyboard(chatId, `📞 *Контакты EcoLoop:*
-
-👨‍💼 *Менеджер:*
-📱 +7 (776) 075-24-63
-📧 info@ecoloop.kz
-
-🕐 *Время работы:*
-Пн-Пт: 9:00 — 18:00
-Сб: 10:00 — 15:00
-
-📍 Алматы, Казахстан`, keyboard);
+  });
 }
 
 async function sendAbout(chatId) {
-  const keyboard = {
+  await sendWithKeyboard(chatId, '🌿 О проекте EcoLoop\n\nПервый в Казахстане маркетплейс для перераспределения излишков от отелей.\n\nПроблема: 40% еды в отелях выбрасывается.\n\nРешение: Скидка 50-70% для покупателей + монетизация для отелей.\n\nРезультаты:\n- 1,250+ кг отходов сокращено\n- 47+ лотов продано\n- 10+ отелей-партнеров\n- 4.8 рейтинг', {
     inline_keyboard: [
       [{ text: '🏨 Подключить отель', callback_data: 'forhotels' }],
       [{ text: '🛍️ Купить лот', callback_data: 'lots' }],
       [{ text: '◀️ Назад', callback_data: 'menu' }]
     ]
-  };
-  await sendMessageWithKeyboard(chatId, `🌿 *О проекте EcoLoop*
-
-Первый в Казахстане маркетплейс для перераспределения излишков от отелей.
-
-🎯 *Проблема:*
-40% еды в отелях выбрасывается.
-Текстиль и пластик — на свалку.
-
-💡 *Решение:*
-Скидка 50-70% для покупателей.
-Монетизация для отелей.
-
-🏆 *Результаты:*
-• 1,250+ кг отходов сокращено
-• 47+ лотов продано
-• 10+ отелей-партнёров
-• ⭐ 4.8 рейтинг`, keyboard);
+  });
 }
 
 async function sendPrices(chatId) {
-  const keyboard = {
-    inline_keyboard: [
-      [{ text: '🛍️ Смотреть лоты', callback_data: 'lots' }],
-      [{ text: '◀️ Назад', callback_data: 'menu' }]
-    ]
-  };
-  await sendMessageWithKeyboard(chatId, `💰 *Как формируются цены:*
-
-Скидка *50-70%* от розничной цены.
-
-📊 *Примеры:*
-🍽️ Выпечка 5 кг: *₸500* (розница ₸1,500)
-♻️ Пластик 50 кг: *₸200* (розница ₸600)
-👕 Текстиль 20 шт: *₸150* (розница ₸450)
-
-💳 *Оплата:*
-• Kaspi перевод
-• Банковская карта (Visa/MC)
-
-📦 *Самовывоз* из отеля — бесплатно`, keyboard);
+  await sendWithKeyboard(chatId, '💰 Как формируются цены:\n\nСкидка 50-70% от розничной цены.\n\nПримеры:\n🍽️ Выпечка 5 кг: 500 тг (розница 1,500)\n♻️ Пластик 50 кг: 200 тг (розница 600)\n👕 Текстиль 20 шт: 150 тг (розница 450)\n\nОплата: Kaspi / Visa / MC\nСамовывоз — бесплатно', {
+    inline_keyboard: [[{ text: '🛍️ Смотреть лоты', callback_data: 'lots' }], [{ text: '◀️ Назад', callback_data: 'menu' }]]
+  });
 }
 
 async function sendForHotels(chatId) {
-  const keyboard = {
+  await sendWithKeyboard(chatId, '🏨 Для отелей и ресторанов:\n\nПодключение за 3 дня:\n1. Заявка на сайте\n2. Проверка БИН + документов\n3. Договор через ЭЦП\n4. Онбординг + обучение\n\nУсловия:\n- Комиссия: 10% от сделки\n- Выплаты: еженедельно\n- Минимальный объем: нет\n\nВы получите: монетизацию списаний, ESG-отчетность, личного менеджера', {
     inline_keyboard: [
-      [{ text: '📝 Подать заявку на сайте', url: 'https://ecoloop.pages.dev' }],
+      [{ text: '📝 Подать заявку', url: 'https://ecoloop.pages.dev' }],
       [{ text: '📞 Позвонить менеджеру', callback_data: 'contacts' }],
       [{ text: '◀️ Назад', callback_data: 'menu' }]
     ]
-  };
-  await sendMessageWithKeyboard(chatId, `🏨 *Для отелей и ресторанов:*
-
-*Подключение за 3 дня:*
-1️⃣ Заявка на сайте
-2️⃣ Проверка БИН + документов
-3️⃣ Договор через ЭЦП
-4️⃣ Онбординг + обучение
-
-💰 *Условия:*
-• Комиссия: *10%* от сделки
-• Выплаты: еженедельно
-• Минимальный объём: нет
-
-📈 *Что получите:*
-• Монетизация списаний
-• ESG-отчётность
-• Личный менеджер
-• Аналитика в кабинете
-• Публикация в рейтинге эко-отелей`, keyboard);
+  });
 }
 
 async function sendFAQ(chatId) {
-  const keyboard = {
+  await sendWithKeyboard(chatId, '❓ Частые вопросы:\n\nQ: Безопасно ли покупать еду?\nA: Да, все проходит контроль. Срок годности мин. 6 часов.\n\nQ: Как оплатить?\nA: Kaspi перевод или карта Visa/MC.\n\nQ: Можно вернуть?\nA: Да, в течение 2 часов.\n\nQ: Как часто лоты?\nA: Каждый день. Пик: 14:00-20:00.\n\nQ: Подключение отеля стоит?\nA: Бесплатно. Комиссия 10% только с продаж.\n\nQ: Работаете за пределами Алматы?\nA: Пока Алматы и Астана.', {
     inline_keyboard: [
       [{ text: '📝 Оставить вопрос', callback_data: 'request' }],
       [{ text: '📞 Позвонить', callback_data: 'contacts' }],
       [{ text: '◀️ Назад', callback_data: 'menu' }]
     ]
-  };
-  await sendMessageWithKeyboard(chatId, `❓ *Частые вопросы:*
-
-*Q: Безопасно ли покупать еду?*
-A: Да. Все продукты проходят контроль. Срок годности минимум 6 часов.
-
-*Q: Как оплатить?*
-A: Kaspi перевод или карта Visa/MC прямо на сайте.
-
-*Q: Можно ли вернуть товар?*
-A: Да, в течение 2 часов после покупки при несоответствии описанию.
-
-*Q: Как часто появляются лоты?*
-A: Каждый день. Максимум лотов — с 14:00 до 20:00.
-
-*Q: Я отель — сколько стоит подключение?*
-A: Бесплатно. Комиссия 10% только с продаж.
-
-*Q: Работаете за пределами Алматы?*
-A: Пока только Алматы и Астана. Расширяемся!`, keyboard);
+  });
 }
 
 async function sendFeedbackPrompt(chatId) {
-  const keyboard = {
-    inline_keyboard: [
-      [{ text: '◀️ Назад', callback_data: 'menu' }]
-    ]
-  };
-  await sendMessageWithKeyboard(chatId, `⭐ *Обратная связь:*
-
-Напиши в любом формате:
-
-_Отзыв: Отличный сервис! Купил Magic Box — всё свежее._
-
-Или:
-
-_Жалоба: Описание проблемы_
-
-Мы читаем каждый отзыв!`, keyboard);
+  await sendWithKeyboard(chatId, '⭐ Обратная связь:\n\nНапиши в любом формате:\nОтзыв: Отличный сервис!\n\nИли:\nЖалоба: Описание проблемы\n\nМы читаем каждый отзыв!', {
+    inline_keyboard: [[{ text: '◀️ Назад', callback_data: 'menu' }]]
+  });
 }
 
-async function sendAdminStats(chatId) {
-  await sendMessage(chatId, `📊 *Админ-статистика:*\n\n🤖 *Бот:*\n• Версия: 3.0\n• Антиспам: ${RATE_LIMIT_MAX} msg/${RATE_LIMIT_WINDOW/1000}s\n• Админов: ${ADMINS.length}\n• Ожидают одобрения: ${pendingApprovals.size}\n• Активных в кэше: ${rateLimit.size}\n\n📅 Обновлено: ${new Date().toLocaleString('ru-RU')}\n\n📋 Firebase Console:\n🔗 https://console.firebase.google.com`);
-}
-
-// ===== УТИЛИТЫ =====
-
-function formatData(data) {
-  let text = '';
-  for (const [key, value] of Object.entries(data)) {
-    if (value) text += `*${key}:* ${value}\n`;
-  }
-  return text;
-}
-
-// ===== ОТПРАВКА СООБЩЕНИЙ =====
-async function sendMessage(chatId, text) {
+// ===== ОТПРАВКА (без parse_mode — 100% стабильно) =====
+async function send(chatId, text) {
   try {
-    const res = await fetch(`${TG_API}/sendMessage`, {
+    const r = await fetch(`${TG_API}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: text,
-        disable_web_page_preview: true
-      })
+      body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true })
     });
-    const json = await res.json();
-    if (!json.ok) console.error('sendMessage error:', json);
-  } catch (err) {
-    console.error('sendMessage fetch error:', err);
-  }
+    const j = await r.json();
+    if (!j.ok) console.error('send err:', j);
+    return j;
+  } catch (e) { console.error('send fetch err:', e); }
 }
 
-async function sendMessageWithKeyboard(chatId, text, keyboard) {
+async function sendWithKeyboard(chatId, text, keyboard) {
   try {
-    const res = await fetch(`${TG_API}/sendMessage`, {
+    const r = await fetch(`${TG_API}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: text,
-        disable_web_page_preview: true,
-        reply_markup: keyboard
-      })
+      body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true, reply_markup: keyboard })
     });
-    const json = await res.json();
-    if (!json.ok) console.error('sendMessageWithKeyboard error:', json);
-  } catch (err) {
-    console.error('sendMessageWithKeyboard fetch error:', err);
-  }
+    const j = await r.json();
+    if (!j.ok) console.error('sendKB err:', j);
+    return j;
+  } catch (e) { console.error('sendKB fetch err:', e); }
 }
 
-async function editMessage(chatId, messageId, text) {
+async function editMsg(chatId, messageId, text) {
   try {
-    const res = await fetch(`${TG_API}/editMessageText`, {
+    const r = await fetch(`${TG_API}/editMessageText`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: chatId,
-        message_id: messageId,
-        text: text,
-        disable_web_page_preview: true
-      })
+      body: JSON.stringify({ chat_id: chatId, message_id: messageId, text, disable_web_page_preview: true })
     });
-    const json = await res.json();
-    if (!json.ok) console.error('editMessage error:', json);
-  } catch (err) {
-    console.error('editMessage fetch error:', err);
-  }
+    const j = await r.json();
+    if (!j.ok) console.error('edit err:', j);
+    return j;
+  } catch (e) { console.error('edit fetch err:', e); }
 }
 
-// ===== ЗАПУСК СЕРВЕРА =====
+// ===== ЗАПУСК =====
 app.listen(PORT, () => {
-  console.log(`🤖 EcoLoop Bot v3.0 запущен на порту ${PORT}`);
+  console.log(`🤖 EcoLoop Bot v4.0 on port ${PORT}`);
   console.log(`📡 Webhook: /webhook`);
   console.log(`📋 API: /api/submit`);
   console.log(`🏥 Health: /`);
