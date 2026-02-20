@@ -10,6 +10,8 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-firestore-compat.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap');
         
@@ -2613,32 +2615,67 @@
             );
         }
 
+        // ===== FIREBASE INIT =====
+        const firebaseConfig = {
+            apiKey: "AIzaSyD7-uqvnY8lb8Xb3DIJTn3VdAeMXR7A-qM",
+            authDomain: "teenx-hub.firebaseapp.com",
+            projectId: "teenx-hub",
+            storageBucket: "teenx-hub.firebasestorage.app",
+            messagingSenderId: "230323449629",
+            appId: "1:230323449629:web:d35086d70526caaa6c7bf4"
+        };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+
         // ===== TELEGRAM WEBHOOK =====
         const TG_BOT_TOKEN = '8547995948:AAGP-JDNJowAvmTqMK04n9rNZ16519dp2C8';
         const TG_CHAT_ID = '7682446178';
 
-        function sendToTelegram(type, data) {
+        async function sendToTelegram(type, data) {
             const labels = {
                 callback: '📞 Обратный звонок',
                 hotel: '🏨 Заявка отеля',
                 request: '📋 Новый запрос',
                 buyer: '👤 Регистрация покупателя'
             };
-            let text = `${labels[type] || '📩 Новая заявка'}\n\n`;
-            Object.entries(data).forEach(([k, v]) => {
-                if (v && typeof v === 'string') text += `${k}: ${v}\n`;
-            });
-            text += `\n🕐 ${new Date().toLocaleString('ru-RU')}`;
-
-            if (TG_BOT_TOKEN === 'YOUR_BOT_TOKEN') {
-                console.log('[TG Mock]', text);
-                return;
+            
+            // Сохраняем в Firestore
+            try {
+                await db.collection('submissions').add({
+                    type,
+                    data,
+                    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+                    status: 'new'
+                });
+                console.log('✅ Сохранено в Firestore');
+            } catch (err) {
+                console.error('❌ Ошибка Firestore:', err);
             }
-            fetch(`https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ chat_id: TG_CHAT_ID, text, parse_mode: 'HTML' })
-            }).catch(err => console.warn('TG send failed:', err));
+
+            // Отправляем через бота (с кнопками одобрения)
+            const BOT_API = 'https://ecoloop-idd1.onrender.com';
+            try {
+                const res = await fetch(`${BOT_API}/api/submit`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ type, data })
+                });
+                const result = await res.json();
+                console.log('✅ Отправлено через бота:', result);
+            } catch (err) {
+                console.warn('Bot API failed, fallback to direct TG:', err);
+                // Фолбэк: напрямую в Telegram
+                let text = `${labels[type] || '📩 Новая заявка'}\n\n`;
+                Object.entries(data).forEach(([k, v]) => {
+                    if (v && typeof v === 'string') text += `${k}: ${v}\n`;
+                });
+                text += `\n🕐 ${new Date().toLocaleString('ru-RU')}`;
+                fetch(`https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ chat_id: TG_CHAT_ID, text, parse_mode: 'HTML' })
+                }).catch(e => console.warn('TG fallback failed:', e));
+            }
         }
 
         // ===== АДМИН-ПАНЕЛЬ =====
